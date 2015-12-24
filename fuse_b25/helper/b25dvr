@@ -52,7 +52,7 @@ for i in /dev/dvb/adapter$orig_adapter/*; do
 		ln -s "/dev/dvb/adapter$orig_adapter/$item" "/dev/dvb/adapter$new_adapter/$item"
 	else
 		touch "/dev/dvb/adapter$new_adapter/$item" || exit 1
-		chown root.video "/dev/dvb/adapter$new_adapter/$item"
+		chown root:video "/dev/dvb/adapter$new_adapter/$item"
 		chmod 0664 "/dev/dvb/adapter$new_adapter/$item"
 	fi
 done

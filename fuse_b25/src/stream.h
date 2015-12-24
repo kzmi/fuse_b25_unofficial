@@ -1,6 +1,6 @@
 /*
  * stream.h: read & de-scramble data from DVR0
- * Copyright 2009 0p1pp1
+ * Copyright 2011 0p1pp1
  * 
  * This program can be distributed under the terms of the GNU GPL.
  * See the file COPYING.
@@ -16,6 +16,7 @@
 
 #include "bcas.h"
 #include "demulti2.h"
+#include "pfdmap.h"
 
 /* TS packet flags */
 #define TS_F_TSEI 0x80
@@ -63,22 +64,31 @@ struct options {
 	int emm;  /* flag to process EMM */
 	int conv; /* flag to convert NIT, SDT */
 	int eit;  /* flag to convert EIT */
+	int utc;  /* flag to adjust the time in EIT into UTC, */
+	int cutoff; /* flag to discard the beginning of the stream */
+			/* until the descrambling starts */
 
 	char dvr_name[32];
+	char dmx_name[32];
 	struct bcas card;
 };
 
+struct stream_priv;
+
 struct section {
 	void *priv; // pointer to PMT, ECM, EMM...
+
+	uint16_t pid;
+	int fd; // file descriptor of the filtering demux device
+	void (*cb_func)(struct stream_priv *, uint16_t pid);
+	unsigned int refcount;
 
 	/* section length */
 	uint16_t len;
 
 	/* buffer for de-packetized section data */
 	uint8_t start_cc;
-	uint8_t last_cc;
-	int buflen;
-#define MAX_SECTION_SIZE (4096 + 3)
+#define MAX_SECTION_SIZE (4096)
 	uint8_t buf[MAX_SECTION_SIZE];
 };
 
@@ -168,6 +178,13 @@ struct stream_priv {
 	pthread_mutex_t cancel_lock;
 
 	iconv_t iconv_cd; // for text conversion
+
+	// for the level 0 PSI's with fixed pid. PAT, CAT, NIT, SDT, EITH
+	struct pfd_map fixed_pid_map;
+	// level 0 PSI's whose pids are defined in PAT/CAT(level0).  PMT, EMM
+	struct pfd_map pmt_emm_map;
+	// level 2 PSI whose pid is defined in PMT(level1). ECM
+	struct pfd_map ecm_map;
 };
 
 extern void push_outbuf(struct stream_priv *priv, uint8_t *buf, size_t len);

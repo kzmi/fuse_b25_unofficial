@@ -1,6 +1,6 @@
 /*
  * FUSE b25: MULTI2 de-scrambler for /dev/dvb/adapterN/dvr0
- * Copyright 2009 0p1pp1
+ * Copyright 2011 0p1pp1
  * 
  * This program can be distributed under the terms of the GNU GPL.
  * See the file COPYING.
@@ -15,6 +15,7 @@
 #include <fuse.h>
 #include <fuse_opt.h>
 #include <inttypes.h>
+#include <libgen.h>
 #include <pthread.h>
 #include <poll.h>
 #include <stddef.h>
@@ -36,13 +37,41 @@
 
 struct options b25_priv;
 
+enum {
+	KEY_MY_USAGE = 0,
+};
+
 static struct fuse_opt b25_opts[] =
 {
 	{"--card %s", offsetof(struct options, card_name), 0},
 	{"--noemm", offsetof(struct options, emm), 0},
 	{"--conv", offsetof(struct options, conv), 1},
 	{"--eit", offsetof(struct options, eit), 1},
+	{"--utc", offsetof(struct options, utc), 1},
+	{"--cutoff", offsetof(struct options, cutoff), 1},
+	FUSE_OPT_KEY("-h", KEY_MY_USAGE),
+	FUSE_OPT_KEY("--help", KEY_MY_USAGE),
+
+	FUSE_OPT_END
 };
+
+static void
+my_usage(const char *prog_name)
+{
+	char *p = strdup(prog_name);
+
+	fprintf(stderr,
+		"%s specific options:\n"
+		"    --card NAME  \tuse the BCAS card with the name NAME in PC/SC.\n"
+		"    --noemm      \tdon't process EMM\n"
+		"    --conv       \tconvert the text in NIT and SDT into UTF-8\n"
+		"    --eit        \tconvert the text in EIT into UTF-8\n"
+		"    --utc        \tconvert the time in EIT into UTC\n"
+		"    --cutoff     \thold the output of the leading non-scrambled packtes\n"
+		"                \t    until descrambling gets started\n"
+		"\n", basename(p));
+	free(p);
+}
 
 /* file system operations */
 static int
@@ -68,6 +97,8 @@ b25_open(const char *path, struct fuse_file_info *fi)
 	int fd;
 	struct stream_priv *stream;
 	int res;
+	unsigned int adapter, dvr;
+	char dmx_name[32];
 
 	if(strcmp(path, "/") != 0)
 		return -ENOENT;
@@ -77,7 +108,8 @@ b25_open(const char *path, struct fuse_file_info *fi)
 
 	if((fi->flags & O_ACCMODE) != O_RDONLY)
 		return -EACCES;
-	fi->flags &= ~(O_CREAT | O_EXCL | O_NONBLOCK | O_NDELAY);
+	fi->flags &= ~(O_CREAT | O_EXCL);
+	fi->flags |= O_NONBLOCK;
 	/*
 	 * FIXME: if vfs layer does not check the permission,
 	 * check here with fuse_get_context()->uid,gid
@@ -158,7 +190,8 @@ b25_read(const char *path, char *buf, size_t size, off_t offset,
 
 	if (stream->err != 0) {
 		len = -stream->err;
-		syslog(LOG_DEBUG, "failed to read from dvr0 device.\n");
+		syslog(LOG_DEBUG, "failed to read from dvr0 device. err:%d\n",
+			stream->err);
 		goto done;
 	}
 
@@ -281,6 +314,14 @@ static struct fuse_operations b25_ops = {
 	.poll = b25_poll,
 };
 
+static int
+my_opt_proc(void *data, const char *arg, int key, struct fuse_args *outargs)
+{
+	if (key == KEY_MY_USAGE)
+		my_usage(outargs->argv[0]);
+	return 1;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -297,7 +338,7 @@ main(int argc, char **argv)
 	memset(&b25_priv, 0, sizeof(b25_priv));
 	b25_priv.emm = 1;
 	b25_priv.conv = 0;
-	res = fuse_opt_parse(&args, &b25_priv, b25_opts, NULL);
+	res = fuse_opt_parse(&args, &b25_priv, b25_opts, &my_opt_proc);
 	if (res == -1) {
 		syslog(LOG_NOTICE, "failed to parse options: %m\n");
 		return 1;
@@ -325,11 +366,21 @@ main(int argc, char **argv)
 		return 1;
 	}
 
+	t_adap = adapter;
+	t_dvr = dvr;
 	res = snprintf(b25_priv.dvr_name, sizeof(b25_priv.dvr_name),
-		      "/dev/dvb/adapter%u/dvr_b25", adapter);
+			"/dev/dvb/adapter%u/dvr_b25", t_adap);
+	b25_priv.dvr_name[sizeof(b25_priv.dvr_name) - 1] = '\x0';
+	if (res >= 0) {
+		res = snprintf(b25_priv.dmx_name, sizeof(b25_priv.dmx_name),
+				"/dev/dvb/adapter%u/demux%u", t_adap, t_dvr);
+		b25_priv.dmx_name[sizeof(b25_priv.dmx_name) - 1] = '\0';
+	}
+
 	if (res < 0 
 #if HAVE_EACCESS
 	    || eaccess(b25_priv.dvr_name, R_OK) != 0
+	    || eaccess(b25_priv.dmx_name, R_OK) != 0
 #endif
 	   ) {
 		syslog(LOG_NOTICE, "can't access the target DVR0 device:[%s]\n", b25_priv.dvr_name);

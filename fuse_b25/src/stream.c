@@ -1,6 +1,6 @@
 /*
  * stream.c: read & de-scramble data from DVR0
- * Copyright 2009 0p1pp1
+ * Copyright 2011 0p1pp1
  * 
  * This program can be distributed under the terms of the GNU GPL.
  * See the file COPYING.
@@ -11,6 +11,10 @@
 #include <string.h>
 #include <stdlib.h>
 #include <sched.h>
+
+#include <poll.h>
+#include <sys/ioctl.h>
+#include <linux/dvb/dmx.h>
 
 #define FUSE_USE_VERSION 28
 #include <fuse.h>
@@ -26,6 +30,14 @@
 extern void convert_nit(struct stream_priv *priv, uint16_t pid);
 extern void convert_sdt(struct stream_priv *priv, uint16_t pid);
 extern void convert_eith(struct stream_priv *priv, uint16_t pid);
+
+static void parse_pmt(struct stream_priv *priv, uint16_t pid);
+static void parse_ecm(struct stream_priv *priv, uint16_t pid);
+static void parse_emm(struct stream_priv *priv, uint16_t pid);
+
+static struct section *get_section_for_pid(struct stream_priv *priv,
+	uint16_t pid, void (*cb_func)(struct stream_priv *, uint16_t));
+static void unref_section(struct stream_priv *priv, struct section *sec);
 
 static int
 ts_sync(uint8_t *buf, size_t len)
@@ -80,17 +92,34 @@ failed:
 	return -1;
 }
 
+static void
+unref_ecm(struct stream_priv *priv, struct pmt *pmt)
+{
+	int i;
+
+	if (!priv || !pmt || pmt->ver == VER_NONE)
+		return;
+
+	if (pmt->prog_ecm.pid != PID_NONE)
+		unref_section(priv, priv->sections[pmt->prog_ecm.pid]);
+	for (i = 0; i < pmt->num_es; i++)
+		if (pmt->es[i].es_ecm.pid != PID_NONE)
+			unref_section(priv,
+				priv->sections[pmt->es[i].es_ecm.pid]);
+}
 
 static void
 parse_pat(struct stream_priv *priv, uint16_t pid)
 {
 	struct pat *pat = &priv->pat;
+	struct pat oldpat;
 	struct section *sec;
 	int ver;
 	int ts_id;
 	int pnum;
 	int i;
 	uint8_t *p;
+	uint16_t pmt_pid;
 
 	sec = priv->sections[pid];
 
@@ -115,6 +144,8 @@ parse_pat(struct stream_priv *priv, uint16_t pid)
 	if (pnum > PSI_MAX_PROG)
 		pnum = PSI_MAX_PROG;
 
+	// backup the previous PAT, to manage refcount of the PMT sections
+	memcpy(&oldpat, pat, sizeof(oldpat));
 	pat->ver = ver;
 	pat->ts_id = ts_id;
 	pat->num_prog = 0;
@@ -122,9 +153,25 @@ parse_pat(struct stream_priv *priv, uint16_t pid)
 	for (i = 0; i < pnum; i++) {
 		pat->program[pat->num_prog].prog_id = p[0] << 8 | p[1];
 		pat->program[pat->num_prog].pmt_pid = (p[2] << 8 | p[3]) & 0x1fff;
-		if (pat->program[pat->num_prog].prog_id != 0)
+		if (pat->program[pat->num_prog].prog_id != 0) {
+			/* increment the refcount of the section.
+			 * if it was used by the previous PAT, 
+			 * the refcount will be 2, but decremented later.
+			 */
+			get_section_for_pid(priv,
+				pat->program[pat->num_prog].pmt_pid, &parse_pmt);
 			pat->num_prog++;
+		}
 		p += 4;
+	}
+
+	// remove the un-used old PMT-pids and/or their ECM-pids 
+	if (oldpat.ver != VER_NONE) {
+		for (i = 0; i < oldpat.num_prog; i++) {
+			pmt_pid = oldpat.program[i].pmt_pid;
+			unref_ecm(priv, priv->sections[pmt_pid]->priv);
+			unref_section(priv, priv->sections[pmt_pid]);
+		}
 	}
 	return;
 }
@@ -133,6 +180,7 @@ static void
 parse_pmt(struct stream_priv *priv, uint16_t pid)
 {
 	struct pmt *pmt;
+	struct pmt oldpmt;
 	struct section *sec;
 	int ver;
 	int prog_id;
@@ -170,6 +218,9 @@ parse_pmt(struct stream_priv *priv, uint16_t pid)
 	if (ver == pmt->ver && prog_id == pmt->prog_id)
 		return; // already processed PMT
 
+	// backup the previous PMT, to manage refcount of the ECM sections
+	memcpy(&oldpmt, pmt, sizeof(oldpmt));
+
 	pmt->prog_id = prog_id;
 	pmt->ver = ver;
 
@@ -190,6 +241,9 @@ parse_pmt(struct stream_priv *priv, uint16_t pid)
 			    pmt->prog_ecm.pid != PID_NONE)
 				syslog(LOG_INFO,
 				      "found an invalid CAS-ID in PMT.\n");
+			else if (pmt->prog_ecm.pid != PID_NONE)
+				get_section_for_pid(priv, pmt->prog_ecm.pid,
+					&parse_ecm);
 			break;
 		}
 
@@ -223,6 +277,9 @@ parse_pmt(struct stream_priv *priv, uint16_t pid)
 				    ca->pid != PID_NONE)
 					syslog(LOG_INFO,
 					      "found an invalid CAS-ID in PMT.\n");
+				else if (ca->pid != PID_NONE)
+					get_section_for_pid(priv, ca->pid,
+						&parse_ecm);
 			} else if (p[0] == DESC_STREAM_ID && p[1] >= 1)
 				pmt->es[pmt->num_es].tag = p[2];
 
@@ -236,8 +293,10 @@ parse_pmt(struct stream_priv *priv, uint16_t pid)
 			break;
 	}
 
+	unref_ecm(priv, &oldpmt);
 	syslog(LOG_DEBUG, "new PMT for prog:%#06x, ver:%#04x, %d-pes's.\n",
 	       prog_id, ver, pmt->num_es);
+
 	return;
 
 bailout:
@@ -304,10 +363,13 @@ static void
 parse_cat(struct stream_priv *priv, uint16_t pid)
 {
 	struct cat *cat = &priv->cat;
+	struct cat oldcat;
 	struct section *sec;
 	int ver;
 	uint8_t *p;
 	struct ca *ca;
+	int i;
+	uint16_t emm_pid;
 
 	sec = priv->sections[pid];
 	if (sec->buf[0] != TID_CAT || sec->len < 12) {
@@ -324,6 +386,7 @@ parse_cat(struct stream_priv *priv, uint16_t pid)
 	if (ver == cat->ver)
 		return;  // already parsed CAT
 
+	memcpy(&oldcat, cat, sizeof(oldcat));
 	cat->ver = ver;
 	cat->num_cas = 0;
 	p = &sec->buf[8];
@@ -337,11 +400,22 @@ parse_cat(struct stream_priv *priv, uint16_t pid)
 			ca->pid =(p[4] & 0x1f) << 8 | p[5];
 			ca->type = p[6];
 
+			if (ca->cas_id == ID_CAS_ARIB && ca->pid != PID_NONE)
+				get_section_for_pid(priv, ca->pid, &parse_emm);
 			cat->num_cas++;
 			if (cat->num_cas >= PSI_MAX_CA)
 				break;
 		}
 		p += p[1] + 2;
+	}
+
+	// remove the un-used old EMM-pids
+	if (oldcat.ver != VER_NONE) {
+		for (i = 0; i < oldcat.num_cas; i++) {
+			emm_pid = oldcat.emm[i].pid;
+			if (emm_pid < PID_NONE)
+				unref_section(priv, priv->sections[emm_pid]);
+		}
 	}
 	syslog(LOG_DEBUG, "new CAT, ver:%#04x, %d-CAs.\n", ver, cat->num_cas);
 	return;
@@ -465,98 +539,116 @@ bailout:
 	return;
 }
 
-
-/*
- * build up a PSI section 
- *  call section_cb() on (every) section complete, 
- */
-static void
-push_section(struct stream_priv *priv, uint8_t *buf,
-	     void (*section_cb)(struct stream_priv *, uint16_t))
+static struct pfd_map *
+get_pfd_map(struct stream_priv *priv,
+	void (*cb_func)(struct stream_priv *, uint16_t))
 {
-	struct section *sec;
-	uint16_t pid;
-	uint8_t cc;
-	uint8_t *p;
-	int len;
+	if (cb_func == &parse_ecm)
+		return &priv->ecm_map;
+	else if (cb_func == &parse_pmt || cb_func == &parse_emm)
+		return &priv->pmt_emm_map;
+	else
+		return &priv->fixed_pid_map;
+}
 
-	pid = (buf[1] & 0x1f) << 8 | buf[2];
-	cc = buf[3] & TS_CC_MASK;
-
-	sec = priv->sections[pid];
-	if (sec == NULL) {
-		sec = calloc(1, sizeof(struct section));
-		if (sec == NULL) {
-			syslog(LOG_NOTICE, "failed to alloc section buffer.\n");
-			return;
-		}
-		priv->sections[pid] = sec;
-		sec->last_cc = CC_NONE;
-		syslog(LOG_DEBUG, "created new section for pid:[%#06hx].\n", pid);
-	}
-
-	p = buf + 4;
-	if (buf[3] & TS_F_ADAP)
-		p += *p + 1;
-	len = 188 - (p - buf);
-	if (len < 3 || !(buf[3] & TS_F_PAYLOAD)) // too short/no payload
+static void
+cleanup_section(struct stream_priv *priv, struct section *sec)
+{
+	if (!priv || !sec || sec->pid > PID_NONE)
 		return;
 
-	if (buf[1] & TS_F_PUSI)
-		len = *p++;
-
-	// fill  the previous section
-	if (cc == ((sec->last_cc + 1) & 0x0f) && len > 0 && sec->len > 0) {
-		sec->last_cc = cc;
-		if (sec->len - sec->buflen <= len) {
-			memcpy(&sec->buf[sec->buflen], p, sec->len - sec->buflen);
-			sec->buflen = sec->len;
-			section_cb(priv, pid);
-			sec->last_cc = CC_NONE;
-		} else {
-			memcpy(&sec->buf[sec->buflen], p, len);
-			sec->buflen += len;
-		}
+	if (remove_from_pfd_map(get_pfd_map(priv, sec->cb_func), sec->pid)) {
+		syslog(LOG_INFO,
+			"failed to remove the section(pid:%#06hx).\n",
+			sec->pid);
 	}
-	p += len;
+	if (sec->priv != NULL)
+		free(sec->priv);
+	ioctl(sec->fd, DMX_STOP);
+	close(sec->fd);
+	priv->sections[sec->pid] = NULL;
+	free(sec);
+}
 
-	while ((buf[1] & TS_F_PUSI) && p + 3 <= buf + 188) {
-		if (*p == 0xff || *p == TID_ST)
-			break;
-		/* new section starts */
+static void
+unref_section(struct stream_priv *priv, struct section *sec)
+{
+	if (!priv || !sec || sec->pid > PID_NONE)
+		return;
 
-		if (sec->buf[0] != p[0] && sec->priv != NULL) {
-			if (pid != PID_EITH)
-				syslog (LOG_INFO,
-				    "detected a TID change[%#04hhx->%#04hhx]"
-				    " in the same pid[%#06hx].\n",
-				    sec->buf[0], p[0], pid);
-			free(sec->priv);
-			sec->priv = NULL;
-		}
+	if (sec->refcount > 0)
+		sec->refcount--;
 
-		sec->len = ((p[1] & 0x0f) << 8) + p[2] + 3;
-		if (sec->len > sizeof(sec->buf))
-			break;
+	if (sec->refcount)
+		return;
 
-		sec->buflen = 0;
-		sec->start_cc = cc;
-		sec->last_cc = cc;
+	syslog(LOG_DEBUG, "removed the section for pid:[%#06hx].\n", sec->pid);
+	cleanup_section(priv, sec);
+}
 
-		len = buf + 188 - p;
-		if (sec->len < len)
-			len = sec->len;
+static struct section *
+get_section_for_pid(struct stream_priv *priv, uint16_t pid,
+	void (*cb_func)(struct stream_priv *, uint16_t))
+{
+	struct section *sec;
+	struct dmx_sct_filter_params secfilter;
+	int err;
 
-		memcpy(sec->buf, p, len);
-		sec->buflen = len;
+	if (priv == NULL || pid > 0x1fff)
+		return NULL;
 
-		if (len == sec->len) {
-			section_cb(priv, pid);
-			sec->last_cc = CC_NONE;
-		}
-		p += len;
+	sec = priv->sections[pid];
+	if (sec && sec->cb_func != cb_func) {
+		syslog(LOG_INFO, "PID:%#06hx is reused by another"
+			" type of section", pid);
+		cleanup_section(priv, sec);
+		sec = NULL;
 	}
-	return;
+	if (sec == NULL) {
+		sec = calloc(1, sizeof(struct section));
+		if (sec == NULL)
+			return NULL;
+
+		sec->pid = pid;
+		sec->cb_func = cb_func;
+		sec->fd = open(priv->fs_priv->dmx_name, O_RDONLY | O_NONBLOCK);
+		if (sec->fd < 0) {
+			err = errno;
+			syslog(LOG_INFO, "failed to open the demux device:%s\n",
+				priv->fs_priv->dmx_name);
+			free(sec);
+			errno = err;
+			return NULL;
+		}
+		if (add_to_pfd_map(get_pfd_map(priv, cb_func), pid, sec->fd)) {
+			syslog(LOG_INFO, "failed to add the pollfd for pid:"
+				"%#06hx.\n", pid);
+			close(sec->fd);
+			free(sec);
+			errno = ENOMEM;
+			return NULL;
+		}
+		memset(&secfilter, 0, sizeof(secfilter));
+		secfilter.pid = pid;
+		secfilter.flags = DMX_IMMEDIATE_START;
+		if (ioctl(sec->fd, DMX_SET_FILTER, &secfilter) < 0) {
+			err = errno;
+			syslog(LOG_INFO, "failed to set the filter for pid:"
+				"%#06hx to the demux device:%s\n",
+				pid, priv->fs_priv->dmx_name);
+			if (remove_from_pfd_map(get_pfd_map(priv, cb_func), pid))
+				syslog(LOG_INFO, "failed to remove the poll fd"
+					" for pid:%#06hx.\n", pid);
+			close(sec->fd);
+			free(sec);
+			errno = err;
+			return NULL;
+		}
+		priv->sections[pid] = sec;
+		syslog(LOG_DEBUG, "created new section for pid:[%#06hx].\n", pid);
+	}
+	sec->refcount++;
+	return sec;
 }
 
 
@@ -649,7 +741,7 @@ push_outbuf(struct stream_priv *priv, uint8_t *buf, size_t len)
 {
 	int l;
 
-	if (!priv->output_start) {
+	if (!priv->output_start && priv->fs_priv->cutoff) {
 		//syslog(LOG_DEBUG, "not yet prepared to outputuf, discarding data.\n");
 		return;
 	}
@@ -691,7 +783,6 @@ process_packet(struct stream_priv *priv, uint8_t *buf)
 {
 	uint16_t pid;
 	int ret;
-	void (*section_cb)(struct stream_priv *, uint16_t);
 	int i, j;
 	struct section *sec;
 	struct pmt *pmt;
@@ -703,59 +794,41 @@ process_packet(struct stream_priv *priv, uint8_t *buf)
 	if (pid == PID_NONE)
 		return;
 
-	/* if PSI that requires text conversion, */
-	/* defer the output until section end */
-	section_cb = NULL;
-
 #if HAVE_ICONV_H
+	/* if the packet is part of the PSI which is set to be converted,
+	 * the same data is read from the section filter descriptor as well.
+	 * thus, let its section callback func output the converted data,
+	 *  and don't output here.
+	 */
 	if (priv->fs_priv->conv && pid == PID_NIT)
-		section_cb = convert_nit;
-	else if (priv->fs_priv->conv && pid == PID_SDT)
-		section_cb = convert_sdt;
-	else if (priv->fs_priv->eit && pid == PID_EITH)
-		section_cb = convert_eith;
-
-	if (section_cb != NULL) {
-		push_section(priv, buf, section_cb);
-		return; // not copy to the priv->outbuf here.
-	}
+		return;
+	if (priv->fs_priv->conv && pid == PID_SDT)
+		return;
+	if ((priv->fs_priv->eit || priv->fs_priv->utc) && pid == PID_EITH)
+		return;
 #endif
 
-	if (pid == PID_PAT)
-		section_cb = parse_pat;
-	else if (pid == PID_CAT && priv->fs_priv->emm)
-		section_cb = parse_cat;
-	else if (pid >= 0x002a) {
+	/* descramble the packet (if the necessary PSI's are available) */
+	if (pid >= 0x002a && (buf[3] & TS_CA_MASK)) {
+		if (pid == PID_NONE)
+			goto done;
+
 		/* check non-fixed-pid PSI: PMT,ECM,EMM */
 		if (priv->cat.ver != VER_NONE) {
-			for (i = 0; i< priv->cat.num_cas; i++) {
-				if (priv->cat.emm[i].pid == pid &&
-				    priv->cat.emm[i].pid != PID_NONE &&
-				    priv->cat.emm[i].cas_id == priv->fs_priv->card.cas_id) {
-					section_cb = parse_emm;
+			for (i = 0; i< priv->cat.num_cas; i++)
+				if (priv->cat.emm[i].pid == pid)
 					goto done;
-				}
-			}
 		}
 
-		if (priv->pat.ver == VER_NONE) {
-#if REPLACE_WITH_NULL
-			buf[1] |= 0x1f;
-			buf[2] = 0xff;
-			buf[3] &= ~TS_CA_MASK;
+		if (priv->pat.ver == VER_NONE)
 			goto done;
-#else
-			return; // avoid non-scrambled 1seg program comes out 1st
-#endif
-		}
 
 		for (i = 0; i < priv->pat.num_prog; i++) {
 			if (priv->pat.program[i].prog_id == 0)
 				continue;
-			if (priv->pat.program[i].pmt_pid == pid) {
-				section_cb = parse_pmt;
+			if (priv->pat.program[i].pmt_pid == pid)
 				goto done;
-			}
+
 			sec = priv->sections[priv->pat.program[i].pmt_pid];
 			if (sec == NULL)
 				continue;
@@ -764,57 +837,119 @@ process_packet(struct stream_priv *priv, uint8_t *buf)
 			pmt = sec->priv;
 			if (pmt->ver == VER_NONE)
 				continue;
-			if (pmt->prog_ecm.pid == pid &&
-			    pmt->prog_ecm.pid != PID_NONE) {
-				section_cb = parse_ecm;
+
+			if (pmt->prog_ecm.pid == pid)
 				goto done;
-			}
+
 			for (j = 0; j < pmt->num_es; j++) {
 				if (pmt->es[j].es_pid == pid) {
-					if (buf[3] & TS_CA_MASK)
-						descramble(priv, buf,
-						    &pmt->prog_ecm,
+					descramble(priv, buf, &pmt->prog_ecm,
 						    &pmt->es[j].es_ecm);
-					if (buf[3] & TS_CA_MASK) {
-#if REPLACE_WITH_NULL
-						buf[1] |= 0x1f;
-						buf[2] = 0xff;
-						buf[3] &= ~TS_CA_MASK;
-#else
-						return;
-#endif
-					}
 					goto done;
 				}
-				if (pmt->es[j].es_ecm.pid == pid &&
-				    pmt->es[j].es_ecm.pid != PID_NONE &&
-				    pmt->es[j].es_ecm.pid != 0) {
-					section_cb = parse_ecm;
+				if (pmt->es[j].es_ecm.pid == pid)
 					goto done;
-				}
 			}
-		}
-		// for the packets with un-identified PID
-		if (buf[3] & TS_CA_MASK) {
-#if REPLACE_WITH_NULL
-			buf[1] |= 0x1f;
-			buf[2] = 0xff;
-			buf[3] &= ~TS_CA_MASK;
-#else
-			return;
-#endif
 		}
 	}
 
 done:
-	if (section_cb != NULL)
-		push_section(priv, buf, section_cb);
-
+	if (buf[3] & TS_CA_MASK) {
+#if REPLACE_WITH_NULL
+		buf[1] |= 0x1f;
+		buf[2] = 0xff;
+		buf[3] &= ~TS_CA_MASK;
+#else
+		return;
+#endif
+	}
 	push_outbuf(priv, buf, 188);
 	return;
 }
 
+static int
+setup_fixed_pid_sections(struct stream_priv *priv)
+{
+	if (!get_section_for_pid(priv, PID_PAT, &parse_pat))
+		return -1;
 
+	if (priv->fs_priv->emm) {
+		if (!get_section_for_pid(priv, PID_CAT, &parse_cat))
+			return -1;
+	}
+
+	if (priv->fs_priv->conv) {
+		if (!get_section_for_pid(priv, PID_NIT, &convert_nit))
+			return -1;
+
+		if (!get_section_for_pid(priv, PID_SDT, &convert_sdt))
+			return -1;
+	}
+
+	if (priv->fs_priv->eit || priv->fs_priv->utc) {
+		if (!get_section_for_pid(priv, PID_EITH, &convert_eith))
+			return -1;
+	}
+	return 0;
+}
+
+static int
+do_read_section(struct stream_priv *priv, struct pfd_map *map, int timeout)
+{
+	int i;
+	int res;
+	uint16_t pid;
+	int err = 0;
+	struct section *sec;
+
+	if (map->num_used == 0)
+		return 0;
+
+	res = poll(map->pfds, map->num_used, timeout);
+	if (res < 0) {
+		err = errno;
+		goto failed;
+	}
+
+	if (res == 0)
+		return 0;
+
+	for (i = 0; i < map->num_used; i++) {
+		if (map->pfds[i].revents == POLLIN) {
+			pid = map->pids[i];
+			sec = priv->sections[pid];
+			if (!sec) {
+				err = EINVAL;
+				syslog(LOG_INFO, "poll found a invalid"
+					" section for pid:%#06hx", pid);
+				goto failed;
+			}
+			res = read(map->pfds[i].fd, sec->buf, sizeof(sec->buf));
+			if (res <= 0) {
+				err = errno;
+				syslog(LOG_INFO, "failed to read the"
+					" section for pid:%#06hx", pid);
+				goto failed;
+			}
+			sec->len = res;
+			if (sec->cb_func)
+				sec->cb_func(priv, pid);
+		} else if (map->pfds[i].revents != 0) {
+			err = EIO;
+			syslog(LOG_INFO, "poll received an error on the fd"
+				" for pid:%#06hx", map->pids[i]);
+			goto failed;
+		}
+	}
+	
+	return 0;
+
+failed:
+	err = errno;
+	syslog(LOG_INFO, "failed to poll. errno:%d.\n", err);
+	return err;
+}
+ 
 static void *
 fetch_loop(void *data)
 {
@@ -823,21 +958,62 @@ fetch_loop(void *data)
 	uint8_t *p;
 	int min_read;
 	int len;
+	int timeout;
+	int err = 0;
+	struct pollfd pfd;
 
+	if (setup_fixed_pid_sections(priv) < 0) {
+		syslog(LOG_INFO, "failed to setup pollfd's for PAT etc.\n");
+		goto failed;
+	}
 
+	pfd.fd = priv->fd;
+	pfd.events = POLLIN;
 	min_read = MAX_SCAN_LEN;
 	while (1) {
+		/* check for data availability of each fd's */
+		timeout = (priv->pat.ver != VER_NONE) ? 0 : -1;
+		err = do_read_section(priv, &priv->fixed_pid_map, timeout);
+		if (err)
+			goto failed;
+
+		err = do_read_section(priv, &priv->pmt_emm_map, 0);
+		if (err)
+			goto failed;
+
+		res = do_read_section(priv, &priv->ecm_map, 0);
+		if (err)
+			goto failed;
+
 		/* read from dvr0 dev */
 		p = priv->inbuf + priv->inbuf_len;
-		do {
+		res = poll(&pfd, 1, 10);
+		while (res > 0 && priv->inbuf_len < min_read) {
 			res = (int)read(priv->fd, p,
 					sizeof(priv->inbuf) - priv->inbuf_len);
-if (res < 1024) fprintf(stderr, "R%d\n", res);
-			if (res <= 0)
+			if (res == 0 || (res <= 0 && errno != EAGAIN)) {
+				err = errno;
+				syslog(LOG_INFO, "failed to read. ret:%d err:%d",
+					res, err);
 				goto failed;
+			} else if (res < 0) {
+				// EAGAIN
+				res = 0;
+				break;
+			}
 			p += res;
 			priv->inbuf_len += res;
-		} while (priv->inbuf_len < min_read);
+			res = poll(&pfd, 1, 0); // redundant?
+		};
+
+		if (res < 0) {
+			err = errno;
+			syslog(LOG_INFO, "failed to poll on dvr.\n");
+			goto failed;
+		} else if (priv->inbuf_len < min_read) {
+			// res==0. read all data but not enough
+			continue;
+		}
 
 		p = priv->inbuf;
 		len = priv->inbuf_len;
@@ -845,7 +1021,7 @@ if (res < 1024) fprintf(stderr, "R%d\n", res);
 		if (priv->packet_size == 0) {
 			res = get_packet_size(priv);
 			if (res < 0) {
-				errno = EIO;
+				err = EIO;
 				goto failed;
 			} else {
 				min_read = priv->packet_size;
@@ -905,9 +1081,9 @@ if (res < 1024) fprintf(stderr, "R%d\n", res);
 		
 failed:
 	pthread_mutex_lock(&priv->buf_lock);
-	if (errno == 0)
-		errno = EIO;
-	priv->err = errno;
+	if (err == 0)
+		err = EIO;
+	priv->err = err;
 	pthread_cond_signal(&priv->buf_cond);
 	pthread_mutex_unlock(&priv->buf_lock);
 	syslog(LOG_INFO, " fuse_b25 fetch loop exited.\n");
@@ -944,6 +1120,12 @@ init_stream(struct stream_priv *priv)
 		priv->fs_priv->conv = 0;
 	}
 	return 0;
+
+bad_device:
+	syslog(LOG_INFO, "invalid dvr device name:%s.\n",
+		priv->fs_priv->dvr_name);
+	errno = ENXIO;
+	return -errno;
 }
 
 
@@ -968,9 +1150,10 @@ release_stream(struct stream_priv *priv)
 		iconv_close(priv->iconv_cd);
 
 	for (i = 0; i < 8192; i++)
-		if (priv->sections[i] != NULL) {
-			if (priv->sections[i]->priv != NULL)
-				free(priv->sections[i]->priv);
-			free(priv->sections[i]);
-		}
+		if (priv->sections[i] != NULL)
+			cleanup_section(priv, priv->sections[i]);
+
+	free_pfd_map(&priv->fixed_pid_map);
+	free_pfd_map(&priv->pmt_emm_map);
+	free_pfd_map(&priv->ecm_map);
 }

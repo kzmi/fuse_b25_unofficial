@@ -21,6 +21,9 @@
 /* Define to 1 if you have the <inttypes.h> header file. */
 #undef HAVE_INTTYPES_H
 
+/* Define to 1 if you have the <linux/dvb/dmx.h> header file. */
+#undef HAVE_LINUX_DVB_DMX_H
+
 /* Define to 1 if your system has a GNU libc compatible `malloc' function, and
    to 0 otherwise. */
 #undef HAVE_MALLOC
@@ -33,6 +36,10 @@
 
 /* Define to 1 if you have the <nttypes.h> header file. */
 #undef HAVE_NTTYPES_H
+
+/* Define to 1 if your system has a GNU libc compatible `realloc' function,
+   and to 0 otherwise. */
+#undef HAVE_REALLOC
 
 /* Define to 1 if you have the <stddef.h> header file. */
 #undef HAVE_STDDEF_H
@@ -171,6 +178,9 @@
 
 /* Define to `long int' if <sys/types.h> does not define. */
 #undef off_t
+
+/* Define to rpl_realloc if the replacement function should be used. */
+#undef realloc
 
 /* Define to `unsigned int' if <sys/types.h> does not define. */
 #undef size_t

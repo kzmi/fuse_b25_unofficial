@@ -24,6 +24,7 @@
 
 #define TID_NIT_SELF 0x40
 #define TID_SDT 0x42
+#define TID_SDT_OTHERS 0x46
 #define TID_EITH_MIN 0x4e
 #define TID_EITH_MAX 0x6f
 
@@ -46,7 +47,7 @@ static iconv_t cd;
 
 /*
  * for text conversion of EIT,NIT,SDT,....
- * output is deffered until the section end,
+ * output is deferred until the section end,
  * because the section length changes after conversion.
  * this func re-packetizes the converted section and write to priv->outbuf
  */
@@ -105,8 +106,8 @@ output_section(struct stream_priv *priv, uint16_t pid)
 		push_outbuf(priv, stuff, 184 - len);
 	}
 
-	sec->last_cc = CC_NONE;
-	sec->buflen = 0;
+	//sec->last_cc = CC_NONE;
+	//sec->buflen = 0;
 	return;
 }
 
@@ -635,12 +636,13 @@ convert_sdt(struct stream_priv *priv, uint16_t pid)
 	q = sec->priv;
 	ol = 1024 * 2;
 
-	if (*p != TID_SDT || l < 11)
+	if ((*p != TID_SDT && *p != TID_SDT_OTHERS) || l < 11)
 		goto bailout;
 
 	ver = (sec->buf[5] & 0x3e) >> 1;
 	if (q != NULL)
-		if (ver == (q[5] & 0x3e) >> 1 && sec->buf[6] == q[6]) {
+		if (*p == q[0] && ver == (q[5] & 0x3e) >> 1
+		    && sec->buf[6] == q[6]) {
 			q += ((q[1] & 0x0f) << 8) + q[2] + 3;
 			goto done; // already processed SDT
 		}
@@ -730,7 +732,7 @@ convert_eith(struct stream_priv *priv, uint16_t pid)
 		if (*p == q[0] && ver == (q[5] & 0x3e) >> 1 &&
 		    sec->buf[6] == q[6]) {
 			q += ((q[1] & 0x0f) << 8) + q[2] + 3 - 4;
-			goto done; // already processed SDT
+			goto done; // already processed EIT
 		}
 
 	if (q == NULL) {
@@ -755,6 +757,25 @@ convert_eith(struct stream_priv *priv, uint16_t pid)
 		}
 			
 		memcpy(q, p, 12);
+		if (priv->fs_priv->utc) {
+			unsigned int mjd;
+			unsigned int hour;
+			/* convert the start-time in JST to UTC */
+
+			mjd = q[2] << 8 | q[3];
+			hour = (q[4] >> 4) * 10 + (q[4] & 0x0f);
+			if (hour != 0x0f * 10 + 0x0f) {
+				if (hour < 9) {
+					hour += 24 - 9;
+					mjd--;
+				} else
+					hour -= 9;
+				q[2] = (mjd & 0xff00) >> 8;
+				q[3] = mjd & 0xff;
+				q[4] = (hour / 10) << 4 | (hour % 10);
+			}
+		}
+
 		dl = (p[10] & 0x0f) << 8 | p[11];
 		p += 12;
 		l -= 12;
@@ -762,7 +783,12 @@ convert_eith(struct stream_priv *priv, uint16_t pid)
 		ol -= 12;
 		if (l < dl )
 			goto bailout;
-		res = convert_descriptors(p, dl, q, ol);
+		if (priv->fs_priv->eit)
+			res = convert_descriptors(p, dl, q, ol);
+		else {
+			memcpy(q, p, dl);
+			res = dl;
+		}
 		if (res < 0) {
 			syslog(LOG_NOTICE, "bad data/overflow in EIT."
 				" discarding the rest.\n");
