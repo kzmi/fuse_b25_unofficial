@@ -1,0 +1,37 @@
+#!/bin/bash
+# usage: b25dir <<new_adapter#>
+#   Makes the mount point: /dev/dvb/adapter<new_adapter#>
+#   where fuse_b25 can mount on, with the proper permission.
+#
+# requires write permission to /dev/dvb.
+# to run this script from the console user,
+# put this script under /usr/local/sbin and
+#  ln -s /usr/bin/consolehelper /usr/local/bin/b25dir
+#  and copy the relevant files to
+#               /etc/security/console.apps/b25dir,/etc/pam.d/b25dir
+
+new_adapter=$1
+
+function usage () {
+	echo $"Usage: ${0##*/} <new_adapter#>"
+	echo "    makes the fuse_b25 mount point at /dev/dvb/adpter<new_adapter#>."
+	echo "ex."
+	echo " sudo ${0##*/} 9"
+	echo " fuse_b25 [--target /dev/dvb/adapter1] /dev/dvb/adapter9" 
+	echo " mplayer dvb://9@NHK"
+	echo " fusermount -u /dev/dvb/adapter9"
+	echo " sudo rmdir /dev/dvb/adapter9" 
+	exit 1
+}
+
+if [ $# -lt 1 ] || [ x"$1" == x"-h" ] || [ x"$1" == x"--help" ]; then
+	usage
+fi
+
+[ -e "/dev/dvb/adapter$new_adapter" ] && usage
+
+mkdir "/dev/dvb/adapter$new_adapter" || \
+    { echo "can't mkdir /dev/dvb/adapter$new_adapter"; exit 1; }
+
+chown root:video "/dev/dvb/adapter$new_adapter"
+chmod 0775 "/dev/dvb/adapter$new_adapter"

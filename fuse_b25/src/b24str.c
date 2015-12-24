@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <iconv.h>
 #include <stdio.h>
+#include <string.h>
 
 /* exported function */
 int
@@ -327,13 +328,16 @@ aribstr_to_utf8 (iconv_t cd, char *source, size_t len,
   euc_str.buf = NULL;
   euc_str.used = 0;
 
-  if (source == NULL || dest == NULL)
+  if (source == NULL || dest == NULL || buf_len == 0)
     goto bailout;
 
-  if (*source == '\0' || len == 0 || buf_len == 0) {
+  if (*source == '\0' || len == 0 || buf_len < 2) {
     *dest = '\0';
     return 0;
   }
+  /* mark the string as UTF-16BE (ETSI EN300 496 Annex A) */
+  *dest++ = 0x11;
+  buf_len--;
 
   if (cd == (iconv_t)-1)
     goto bailout;
@@ -381,7 +385,7 @@ aribstr_to_utf8 (iconv_t cd, char *source, size_t len,
         mode = NORMAL;
         state = state_def;
         g_string_append_c (&euc_str, source[i]);
-	continue;
+        continue;
         break;
     }
     if (!(source[i] & 0x60))  /* skip C0 or C1 */
@@ -497,18 +501,15 @@ aribstr_to_utf8 (iconv_t cd, char *source, size_t len,
     }
   }
 
-  g_string_append_c (&euc_str, '\0');
+  //g_string_append_c (&euc_str, '\0');
 
   p = euc_str.buf; // to keep euc_str.buf unmodified for later free()
   q = dest;
+  memset(dest, 0, buf_len--);
   iconv(cd, &p, &euc_str.used, &dest, &buf_len);
-  if (buf_len > 0)
-    *dest = '\0';
-  else
-    *(dest - 1) = '\0'; // rewrite the tail byte
 
   free(euc_str.buf);
-  return dest - q;
+  return dest - q + 1;
 
 bailout:
   if (euc_str.buf)

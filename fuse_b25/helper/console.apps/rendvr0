@@ -1,3 +1,0 @@
-PROGRAM=/usr/local/sbin/rendvr0
-SESSION=true
-. config-util

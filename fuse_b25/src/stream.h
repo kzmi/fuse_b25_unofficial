@@ -59,7 +59,7 @@
 #define VER_NONE 0x80
 
 struct options {
-	char *target; /* name of the target dvr device */
+	char *target; /* path of the target DVB adapter device */
 	char *card_name;
 	int emm;  /* flag to process EMM */
 	int conv; /* flag to convert NIT, SDT */
@@ -67,9 +67,9 @@ struct options {
 	int utc;  /* flag to adjust the time in EIT into UTC, */
 	int cutoff; /* flag to discard the beginning of the stream */
 			/* until the descrambling starts */
+	int dmxraw; /* flag to disable text conversion in demuxN device */
 
-	char dvr_name[32];
-	char dmx_name[32];
+	char target_dir[32];
 	struct bcas card;
 };
 
@@ -144,8 +144,10 @@ struct cat {
 };
 
 struct stream_priv {
-	int fd; // file descriptor to the real DVR0 device
+	int fd; // file descriptor to the real DVR(N) device
 	struct options *fs_priv;
+	unsigned int dvr_no;
+	char dmx_name[64];  // cache of "<target_dir>/demux<dvr_no>"
 
 	size_t packet_size; // 188, 196?, 204, 212?, 220?
 

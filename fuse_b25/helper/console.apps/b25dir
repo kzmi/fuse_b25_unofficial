@@ -1,0 +1,3 @@
+PROGRAM=/usr/local/sbin/b25dir
+SESSION=true
+. config-util

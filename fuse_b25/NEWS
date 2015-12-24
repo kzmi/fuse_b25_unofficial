@@ -1,3 +1,7 @@
+* Mar. 1 2011 - ver.0.4
+new way to override the original DVB devices,
+supports reading the converted NIT/SDT/EIT from demuxer devices.
+
 * Sep. 17 2010 - ver.0.2
 changed the mapping from mount-point to the original dvr dev.
 

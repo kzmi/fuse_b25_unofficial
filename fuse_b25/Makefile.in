@@ -169,6 +169,8 @@ PATH_SEPARATOR = @PATH_SEPARATOR@
 PCSC_CFLAGS = @PCSC_CFLAGS@
 PCSC_LIBS = @PCSC_LIBS@
 PKG_CONFIG = @PKG_CONFIG@
+PKG_CONFIG_LIBDIR = @PKG_CONFIG_LIBDIR@
+PKG_CONFIG_PATH = @PKG_CONFIG_PATH@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@
 STRIP = @STRIP@
@@ -216,12 +218,12 @@ top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
 SUBDIRS = src
-dist_sbin_SCRIPTS = helper/rendvr0 helper/b25dvr
-EXTRA_DIST = AUTHORS COPYING ChangeLog INSTALL NEWS README \
+dist_sbin_SCRIPTS = helper/b25dir
+EXTRA_DIST = AUTHORS COPYING ChangeLog INSTALL NEWS README README.old \
 	fuse_b25.spec.in \
-	helper/80-dvr-b25.rules \
-	helper/console.apps/rendvr0 helper/console.apps/b25dvr \
-	helper/pam.d/rendvr0 helper/pam.d/b25dvr
+	helper/80-fuse_b25.rules \
+	helper/console.apps/b25dir \
+	helper/pam.d/b25dir
 
 all: config.h
 	$(MAKE) $(AM_MAKEFLAGS) all-recursive

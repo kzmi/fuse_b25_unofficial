@@ -1,6 +1,6 @@
 %define __find_requires %{nil}
 %define _prefix /usr/local
-%define devtool b25dvr
+%define devtool b25dir
 
 Name:           fuse_b25
 Version:        @PACKAGE_VERSION@
@@ -36,8 +36,6 @@ make %{?_smp_mflags}
 %install
 rm -rf $RPM_BUILD_ROOT
 make install DESTDIR=$RPM_BUILD_ROOT
-rm $RPM_BUILD_ROOT%{_bindir}/fuse_b25.org
-rm $RPM_BUILD_ROOT%{_sbindir}/rendvr0
 install -d $RPM_BUILD_ROOT%{_sysconfdir}/pam.d
 install -p -m 0644 helper/pam.d/%{devtool} $RPM_BUILD_ROOT%{_sysconfdir}/pam.d/
 install -d $RPM_BUILD_ROOT%{_sysconfdir}/security/console.apps
@@ -50,8 +48,8 @@ rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(-,root,root,-)
-%doc AUTHORS COPYING ChangeLog NEWS README
-%doc helper/80-dvr-b25.rules helper/rendvr0 src/fuse_b25.org
+%doc AUTHORS COPYING ChangeLog NEWS README README.old
+%doc helper/80-fuse_b25.rules
 %{_bindir}/%{name}
 %{_bindir}/%{devtool}
 %{_sbindir}/%{devtool}
@@ -60,6 +58,9 @@ rm -rf $RPM_BUILD_ROOT
 
 
 %changelog
+* Tue Mar 1 2011 0p1pp1 - 0.4-1
+- updated to ver. 0.4
+
 * Mon Dec 6 2010 0p1pp1 - 0.2.1-1
 - updated to ver. 0.2.1
 

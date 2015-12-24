@@ -1,3 +1,0 @@
-PROGRAM=/usr/local/sbin/b25dvr
-SESSION=true
-. config-util

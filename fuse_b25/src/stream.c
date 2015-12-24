@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <sched.h>
+#include <unistd.h>
 
 #include <poll.h>
 #include <sys/ioctl.h>
@@ -25,11 +26,7 @@
 
 #include "stream.h"
 #include "bcas.h"
-
-/* text conversion related funcs (in convert.c) */
-extern void convert_nit(struct stream_priv *priv, uint16_t pid);
-extern void convert_sdt(struct stream_priv *priv, uint16_t pid);
-extern void convert_eith(struct stream_priv *priv, uint16_t pid);
+#include "convert.h"
 
 static void parse_pmt(struct stream_priv *priv, uint16_t pid);
 static void parse_ecm(struct stream_priv *priv, uint16_t pid);
@@ -77,7 +74,7 @@ get_packet_size(struct stream_priv *priv)
 			if (j == NUM_OK_SYNC) {
 				priv->packet_size = size;
 				syslog(LOG_DEBUG,
-				       "detected TS packet size %u bytes.\n",
+				       "detected TS packet size %lu bytes.\n",
 				       size);
 				return i;
 			}
@@ -85,7 +82,6 @@ get_packet_size(struct stream_priv *priv)
 		}
 	}
 
-failed:
 	syslog(LOG_DEBUG, "failed to detect TS packet size.%m\n");
 	priv->inbuf_len = 0;
 	priv->packet_size = 0;
@@ -311,17 +307,9 @@ parse_ecm(struct stream_priv *priv, uint16_t pid)
 	struct section *sec;
 	int ver;
 
-	int i;
-	uint8_t *p;
-	int len;
-	struct ca *ca;
-
 	sec = priv->sections[pid];
 	if (sec->buf[0] != TID_ECM) {
-		if (sec->priv != NULL) {
-			free(sec->priv);
-			sec->priv = NULL;
-		}
+		syslog(LOG_INFO, "received broken header for ECM.\n");
 		goto bailout;
 	}
 
@@ -341,6 +329,7 @@ parse_ecm(struct stream_priv *priv, uint16_t pid)
 		goto bailout;
 
 	ecm = sec->priv;
+	ecm->kinfo.parent_sec = sec;
 
 	/* cur/next flag should be always 1, */
 	/* but processing the "next" ECM in advance is OK */
@@ -455,7 +444,8 @@ parse_emm(struct stream_priv *priv, uint16_t pid)
 		}
 		emm = sec->priv;
 		emm->ver = VER_NONE;
-	}
+	} else
+		emm = sec->priv;
 
 	/* skip "next" table (which is illegal) */
 	if (!(sec->buf[5] & 0x01))
@@ -573,7 +563,7 @@ cleanup_section(struct stream_priv *priv, struct section *sec)
 static void
 unref_section(struct stream_priv *priv, struct section *sec)
 {
-	if (!priv || !sec || sec->pid > PID_NONE)
+	if (!priv || !sec || sec->pid < 0x20 || sec->pid > PID_NONE)
 		return;
 
 	if (sec->refcount > 0)
@@ -611,11 +601,11 @@ get_section_for_pid(struct stream_priv *priv, uint16_t pid,
 
 		sec->pid = pid;
 		sec->cb_func = cb_func;
-		sec->fd = open(priv->fs_priv->dmx_name, O_RDONLY | O_NONBLOCK);
+		sec->fd = open(priv->dmx_name, O_RDONLY | O_NONBLOCK);
 		if (sec->fd < 0) {
 			err = errno;
 			syslog(LOG_INFO, "failed to open the demux device:%s\n",
-				priv->fs_priv->dmx_name);
+				priv->dmx_name);
 			free(sec);
 			errno = err;
 			return NULL;
@@ -635,7 +625,7 @@ get_section_for_pid(struct stream_priv *priv, uint16_t pid,
 			err = errno;
 			syslog(LOG_INFO, "failed to set the filter for pid:"
 				"%#06hx to the demux device:%s\n",
-				pid, priv->fs_priv->dmx_name);
+				pid, priv->dmx_name);
 			if (remove_from_pfd_map(get_pfd_map(priv, cb_func), pid))
 				syslog(LOG_INFO, "failed to remove the poll fd"
 					" for pid:%#06hx.\n", pid);
@@ -764,7 +754,8 @@ push_outbuf(struct stream_priv *priv, uint8_t *buf, size_t len)
 		if (l >= len)
 			memcpy(priv->outbuf + priv->outbuf_tail, buf, len);
 		else {
-			memcpy(priv->outbuf + priv->outbuf_tail, buf, l);						memcpy(priv->outbuf, buf + l, len - l);
+			memcpy(priv->outbuf + priv->outbuf_tail, buf, l);
+			memcpy(priv->outbuf, buf + l, len - l);
 			if (len -l >= priv->outbuf_head) {
 				syslog(LOG_DEBUG, "outbuf overflowed.\n");
 				advance(&priv->outbuf_head,
@@ -782,7 +773,6 @@ static void
 process_packet(struct stream_priv *priv, uint8_t *buf)
 {
 	uint16_t pid;
-	int ret;
 	int i, j;
 	struct section *sec;
 	struct pmt *pmt;
@@ -901,6 +891,7 @@ do_read_section(struct stream_priv *priv, struct pfd_map *map, int timeout)
 	uint16_t pid;
 	int err = 0;
 	struct section *sec;
+	int seclen;
 
 	if (map->num_used == 0)
 		return 0;
@@ -925,7 +916,8 @@ do_read_section(struct stream_priv *priv, struct pfd_map *map, int timeout)
 				goto failed;
 			}
 			res = read(map->pfds[i].fd, sec->buf, sizeof(sec->buf));
-			if (res <= 0) {
+			seclen = (sec->buf[1] & 0x0f) << 8 | sec->buf[2];
+			if (res < seclen + 3) {
 				err = errno;
 				syslog(LOG_INFO, "failed to read the"
 					" section for pid:%#06hx", pid);
@@ -941,7 +933,7 @@ do_read_section(struct stream_priv *priv, struct pfd_map *map, int timeout)
 			goto failed;
 		}
 	}
-	
+
 	return 0;
 
 failed:
@@ -949,7 +941,16 @@ failed:
 	syslog(LOG_INFO, "failed to poll. errno:%d.\n", err);
 	return err;
 }
- 
+
+static void
+fetch_loop_cleanup(void *data)
+{
+	struct stream_priv *priv = (struct stream_priv *)data;
+
+	pthread_mutex_unlock(&priv->buf_lock);
+	pthread_mutex_unlock(&priv->cancel_lock);
+}
+
 static void *
 fetch_loop(void *data)
 {
@@ -961,6 +962,8 @@ fetch_loop(void *data)
 	int timeout;
 	int err = 0;
 	struct pollfd pfd;
+
+	pthread_cleanup_push(fetch_loop_cleanup, data);
 
 	if (setup_fixed_pid_sections(priv) < 0) {
 		syslog(LOG_INFO, "failed to setup pollfd's for PAT etc.\n");
@@ -1078,7 +1081,7 @@ fetch_loop(void *data)
 			memcpy(priv->inbuf, p, len);
 		priv->inbuf_len = len;
 	}
-		
+
 failed:
 	pthread_mutex_lock(&priv->buf_lock);
 	if (err == 0)
@@ -1087,6 +1090,7 @@ failed:
 	pthread_cond_signal(&priv->buf_cond);
 	pthread_mutex_unlock(&priv->buf_lock);
 	syslog(LOG_INFO, " fuse_b25 fetch loop exited.\n");
+	pthread_cleanup_pop(0);
 	return NULL;
 }
 
@@ -1097,35 +1101,32 @@ failed:
 int
 init_stream(struct stream_priv *priv)
 {
-	int res;
-	iconv_t cd;
-
 	priv->pat.ver = VER_NONE;
 	priv->cat.ver = VER_NONE;
+
+	if (snprintf(priv->dmx_name, sizeof(priv->dmx_name),
+		"%s/demux%u", priv->fs_priv->target_dir, priv->dvr_no) < 0) {
+		syslog(LOG_INFO, "failed to create demuxer device name.\n");
+		return -ENXIO;
+	}
 
 	pthread_mutex_init(&priv->cancel_lock, NULL);
 	pthread_mutex_init(&priv->buf_lock, NULL);
 	pthread_cond_init(&priv->buf_cond, NULL);
-	res = pthread_create(&priv->fetch_thread, NULL, fetch_loop, priv);
-	if (res != 0)
-		return -errno;
 
-	if (priv->fs_priv->conv == 0 && priv->fs_priv->eit == 0)
-		return 0;
-
-	priv->iconv_cd = iconv_open("UTF-8//TRANSLIT", "EUC-JISX0213");
-	if (priv->iconv_cd == (iconv_t)-1) {
-		syslog(LOG_INFO,
-		       "text conv. disabled by the failed iconv_open():%m\n");
-		priv->fs_priv->conv = 0;
+	if (priv->fs_priv->conv || priv->fs_priv->eit) {
+		priv->iconv_cd = iconv_open("UTF-8//TRANSLIT", "EUC-JISX0213");
+		if (priv->iconv_cd == (iconv_t)-1) {
+			syslog(LOG_INFO,
+			       "text conv. disabled as iconv_open() failed:%m\n");
+			priv->fs_priv->conv = 0;
+			priv->fs_priv->eit = 0;
+		}
 	}
-	return 0;
 
-bad_device:
-	syslog(LOG_INFO, "invalid dvr device name:%s.\n",
-		priv->fs_priv->dvr_name);
-	errno = ENXIO;
-	return -errno;
+	if (pthread_create(&priv->fetch_thread, NULL, fetch_loop, priv))
+		return -errno;
+	return 0;
 }
 
 
@@ -1140,8 +1141,17 @@ release_stream(struct stream_priv *priv)
 	pthread_mutex_unlock(&priv->cancel_lock);
 
 	pthread_mutex_lock (&card->lock);
+	/* wait for the last cmd to finish */
+	while (card->status == CARD_S_OK && !card->sleeping) {
+		pthread_mutex_unlock(&card->lock);
+		usleep(1000 * 100);
+		pthread_mutex_lock(&card->lock);
+	}
+
+#if 0
 	card->cmd_len = BCAS_RESET_REQUEST; // tells BCAS to reset
 	pthread_cond_broadcast(&card->cond);
+#endif
 	pthread_mutex_unlock(&card->lock);
 
 	pthread_join(priv->fetch_thread, NULL);

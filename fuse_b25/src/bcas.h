@@ -51,6 +51,7 @@ struct bcas {
 	pthread_mutex_t lock;
 	pthread_cond_t cond;
 	int stop; /* tell the thread to stop */
+	int sleeping;
 };
 
 extern int bcas_init(struct bcas *card);

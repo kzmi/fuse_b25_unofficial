@@ -57,6 +57,7 @@ struct demulti2_key_info {
 	  CMD_S_FAILED,
 	  CMD_S_OK
 	} status;
+	void *parent_sec; /* points (and refs) to struct section */
 };
 
 

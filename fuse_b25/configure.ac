@@ -2,8 +2,8 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.63])
-AC_INIT([fuse_b25], [0.3.0],
-    [http://pc11.2ch.net/test/read.cgi/linux/1269999876/])
+AC_INIT([fuse_b25], [0.4.7],
+    [http://hibari.2ch.net/test/read.cgi/linux/1293388638/])
 AC_CONFIG_SRCDIR([src/b25.c])
 AC_CONFIG_HEADERS([config.h])
 AM_INIT_AUTOMAKE

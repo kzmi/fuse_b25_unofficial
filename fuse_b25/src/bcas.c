@@ -7,6 +7,7 @@
  */
 
 #include "bcas.h"
+#include "stream.h"
 
 /* for htonll(), ntohll() */
 #include "demulti2.h"
@@ -16,6 +17,7 @@
 #include <syslog.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/time.h>
 #include <time.h>
 
 #ifdef NO_SYSLOG
@@ -208,7 +210,7 @@ bcas_card_setup (struct bcas * card, int in_retrying)
         cardinfo_cmd, sizeof (cardinfo_cmd), &rpci, rspbuf, &rlen);
     if (ret == SCARD_W_RESET_CARD) {
       ret = SCardReconnect (card->hcard, SCARD_SHARE_SHARED, SCARD_PROTOCOL_T1,
-          SCARD_LEAVE_CARD, &protocol);
+          SCARD_RESET_CARD, &protocol);
     }
     if (ret == SCARD_S_SUCCESS)
       break;
@@ -246,7 +248,7 @@ do_io_loop(struct bcas *card)
   LONG ret;
   DWORD protocol, rlen;
   SCARD_IO_REQUEST rpci;
-  static const struct timespec wt1 = {1, 0};
+  static const struct timespec wt1 = {0, 500000000};
 
   uint retry = 0;
   uint8_t cmdbuf[BCAS_MAX_MSG_LEN], rspbuf[BCAS_MAX_MSG_LEN];
@@ -256,8 +258,11 @@ do_io_loop(struct bcas *card)
 
   while (1) {
     pthread_mutex_lock (&card->lock);
-    while ((clen = card->cmd_len) == 0)
+    while ((clen = card->cmd_len) == 0) {
+      card->sleeping = 1;
       pthread_cond_wait (&card->cond, &card->lock);
+    }
+    card->sleeping = 0;
 
     /* copy the args */
     if (clen > 0 && clen <= BCAS_MAX_MSG_LEN)
@@ -268,13 +273,13 @@ do_io_loop(struct bcas *card)
     pthread_mutex_unlock (&card->lock);
 
     if (clen == BCAS_RESET_REQUEST) {
-      syslog (LOG_DEBUG, "resetting the card.\n");
+      syslog (LOG_DEBUG, "requested to reset the card.\n");
       ret = SCardReconnect (card->hcard, SCARD_SHARE_SHARED, SCARD_PROTOCOL_T1,
           SCARD_RESET_CARD, &protocol);
       if (ret == SCARD_S_SUCCESS)
         syslog (LOG_DEBUG, "BCAS card has been reset.\n");
       else
-        syslog (LOG_INFO, "BCAS failed to reset. ret=%d.\n", ret);
+        syslog (LOG_INFO, "BCAS failed to reset. ret=%ld.\n", ret);
       continue;
     }
 
@@ -309,7 +314,7 @@ do_io_loop(struct bcas *card)
       SCardDisconnect (card->hcard, SCARD_RESET_CARD);
       nanosleep(&wt1, NULL);
       ret = SCardReconnect (card->hcard, SCARD_SHARE_SHARED, SCARD_PROTOCOL_T1,
-           SCARD_RESET_CARD, &protocol);
+           SCARD_LEAVE_CARD, &protocol);
       if (ret != SCARD_S_SUCCESS) {
         syslog (LOG_INFO, "Failed to reset the card.\n");
         goto bailout;
@@ -345,7 +350,10 @@ failed:
     pthread_mutex_lock (&card->lock);
     if (cmd_arg) {
       struct demulti2_key_info *kinfo = cmd_arg;
+      struct section *sec = kinfo->parent_sec;
+
       kinfo->status = CMD_S_FAILED;
+      sec->refcount--;
     }
     pthread_mutex_unlock (&card->lock);
     continue;
@@ -354,7 +362,10 @@ bailout:
     pthread_mutex_lock (&card->lock);
     if (cmd_arg) {
       struct demulti2_key_info *kinfo = cmd_arg;
+      struct section *sec = kinfo->parent_sec;
+
       kinfo->status = CMD_S_FAILED;
+      sec->refcount--;
     }
     card->status = CARD_S_NG;
     pthread_mutex_unlock (&card->lock);
@@ -435,6 +446,7 @@ bcas_set_ecm(uint8_t *buf, int len, struct demulti2_key_info *kinfo,
 	/*     (len = 6+n) */
 	static const uint8_t ecm_cmd_head[] = {0x90, 0x34, 0x00, 0x00};
 	uint8_t *cmdbuf;
+	struct section *sec;
 
 	pthread_mutex_lock(&card->lock);
 	if (card->status != CARD_S_OK)
@@ -443,6 +455,8 @@ bcas_set_ecm(uint8_t *buf, int len, struct demulti2_key_info *kinfo,
 	if (card->cmd_len != 0)
 		goto bailout;
 
+	sec = kinfo->parent_sec;
+	sec->refcount++;
 	card->cmd_cb = bcas_ecm_cb;
 	card->cmd_arg = kinfo;
 
@@ -530,7 +544,6 @@ bcas_card_io(void *arg)
 	struct bcas *card = arg;
 	struct timespec wt;
 	struct timeval now;
-	int stop;
 	LONG ret;
 	int res;
 	int in_retrying = 0;
@@ -573,7 +586,7 @@ retry:
 	}
 
 	pthread_mutex_unlock(&card->lock);
-	return;
+	return NULL;
 }
 
 int
@@ -602,7 +615,7 @@ bcas_destroy(struct bcas *card)
 	nanosleep(&wt1, NULL);
 
 	if (card->hcard)
-		SCardDisconnect (card->hcard, SCARD_RESET_CARD);
+		SCardDisconnect (card->hcard, SCARD_LEAVE_CARD);
 	SCardReleaseContext (card->cxt);
 	return;
 }

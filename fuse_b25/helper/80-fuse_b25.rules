@@ -1,0 +1,13 @@
+#GOTO="skipme"
+
+#
+# for FUSE b25, only works for 2.6.31+??
+# you can add further conditions to restrict the devices
+#
+# make a mount-point & mount.
+SUBSYSTEM=="dvb", ACTION=="add", ENV{DVB_DEVICE_TYPE}=="dvr", ENV{DVB_DEVICE_NUM}=="0", RUN+="/bin/sh -c 'DIR=/dev/dvb/adapter$$(($env{DVB_ADAPTER_NUM} + 8)); /bin/mkdir $${DIR} && /bin/chgrp video $${DIR} && /bin/chmod 0775 $${DIR} && /usr/local/bin/fuse_b25 -oallow_other $${DIR}'"
+
+# unmount & remove mount-point.
+SUBSYSTEM=="dvb", ACTION=="remove", ENV{DVB_DEVICE_TYPE}=="dvr", ENV{DVB_DEVICE_NUM}=="0", RUN+="/bin/sh -c 'DIR=/dev/dvb/adapter$$(($env{DVB_ADAPTER_NUM} + 8)); /usr/bin/fusermount -u -z -q $${DIR}; /bin/rmdir $${DIR} 2>/dev/null'"
+
+LABEL="skipme"
