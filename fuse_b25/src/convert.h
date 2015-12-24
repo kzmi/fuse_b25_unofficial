@@ -24,7 +24,7 @@
 #define TID_EITH_MAX 0x6f
 
 /* imported function from b24str.c */
-extern int aribstr_to_utf8 (iconv_t cd, char *source, size_t len,
+extern int aribstr_to_utf16 (iconv_t cd, char *source, size_t len,
 			    char *dest, size_t buf_len);
 
 /* text conversion utilities called both from stream.c & secfilter.c */

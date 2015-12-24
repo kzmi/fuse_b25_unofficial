@@ -776,6 +776,7 @@ process_packet(struct stream_priv *priv, uint8_t *buf)
 	int i, j;
 	struct section *sec;
 	struct pmt *pmt;
+	struct bcas *card = &priv->fs_priv->card;
 
 	if (buf[1] & TS_F_TSEI)
 		return;
@@ -799,7 +800,8 @@ process_packet(struct stream_priv *priv, uint8_t *buf)
 #endif
 
 	/* descramble the packet (if the necessary PSI's are available) */
-	if (pid >= 0x002a && (buf[3] & TS_CA_MASK)) {
+	if (pid >= 0x002a && (buf[3] & TS_CA_MASK) &&
+	    card->status == CARD_S_OK) {
 		if (pid == PID_NONE)
 			goto done;
 
@@ -1115,7 +1117,7 @@ init_stream(struct stream_priv *priv)
 	pthread_cond_init(&priv->buf_cond, NULL);
 
 	if (priv->fs_priv->conv || priv->fs_priv->eit) {
-		priv->iconv_cd = iconv_open("UTF-8//TRANSLIT", "EUC-JISX0213");
+		priv->iconv_cd = iconv_open("UTF-16BE//TRANSLIT", "EUC-JISX0213");
 		if (priv->iconv_cd == (iconv_t)-1) {
 			syslog(LOG_INFO,
 			       "text conv. disabled as iconv_open() failed:%m\n");

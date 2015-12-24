@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.63])
-AC_INIT([fuse_b25], [0.4.7],
+AC_INIT([fuse_b25], [0.4.8],
     [http://hibari.2ch.net/test/read.cgi/linux/1293388638/])
 AC_CONFIG_SRCDIR([src/b25.c])
 AC_CONFIG_HEADERS([config.h])

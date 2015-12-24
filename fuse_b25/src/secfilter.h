@@ -18,6 +18,7 @@ enum sectype {
 	SECTION_TYPE_NIT,
 	SECTION_TYPE_SDT,
 	SECTION_TYPE_EIT,
+	SECTION_TYPE_PES = 100,
 };
 
 struct secfilter_priv {

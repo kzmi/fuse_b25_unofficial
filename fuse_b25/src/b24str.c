@@ -13,7 +13,7 @@
 
 /* exported function */
 int
-aribstr_to_utf8 (iconv_t cd, char *source, size_t len, char *dest, size_t buf_len);
+aribstr_to_utf16 (iconv_t cd, char *source, size_t len, char *dest, size_t buf_len);
 
 #define CODE_ASCII ('\x40')
 #define CODE_JISX0208_1978 ('\x40')
@@ -293,7 +293,7 @@ append_arib_char (gstr *euc_str, const struct code_state *state,
 
 
 int
-aribstr_to_utf8 (iconv_t cd, char *source, size_t len,
+aribstr_to_utf16 (iconv_t cd, char *source, size_t len,
     char *dest, size_t buf_len)
 {
   int i, idx = 0;

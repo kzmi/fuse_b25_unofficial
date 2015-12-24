@@ -72,8 +72,8 @@ my_usage(const char *prog_name)
 		"                \t    (default: guessed from the mount point).\n"
 		"    --card NAME  \tuse the BCAS card with the name NAME in PC/SC.\n"
 		"    --noemm      \tdon't process EMM\n"
-		"    --conv       \tconvert the text in NIT and SDT into UTF-8\n"
-		"    --eit        \tconvert the text in EIT into UTF-8\n"
+		"    --conv       \tconvert the text in NIT and SDT into UTF-16BE\n"
+		"    --eit        \tconvert the text in EIT into UTF-16BE\n"
 		"    --utc        \tconvert the time in EIT into UTC\n"
 		"    --cutoff     \thold the output of the leading non-scrambled packtes\n"
 		"                \t    until descrambling gets started\n"
@@ -279,7 +279,7 @@ demux_read(const char *path, char *buf, size_t size, struct fuse_file_info *fi)
 			path, filter->err);
 		goto done;
 	} else if (filter->remaining_len > 0 &&
-		   filter->stype != SECTION_TYPE_NONE) {
+		   filter->stype != SECTION_TYPE_PES) {
 		if (size > filter->remaining_len)
 			size = filter->remaining_len;
 		memcpy(buf, filter->remaining_buf, size);
@@ -319,7 +319,7 @@ demux_read(const char *path, char *buf, size_t size, struct fuse_file_info *fi)
 	}
 
 	/* read out a whole section at once if possible */
-	if (filter->stype != SECTION_TYPE_NONE) {
+	if (filter->stype != SECTION_TYPE_PES) {
 		seclen = get_seclen(filter->outbuf_head, filter->outbuf,
 			sizeof(filter->outbuf));
 		if (size > seclen)
@@ -350,7 +350,7 @@ demux_read(const char *path, char *buf, size_t size, struct fuse_file_info *fi)
 		filter->outbuf_head += len;
 	}
 
-	if (filter->stype != SECTION_TYPE_NONE && len < seclen) {
+	if (filter->stype != SECTION_TYPE_PES && len < seclen) {
 		int l;
 		size = filter->remaining_len = seclen - len;
 		buf = (char *)filter->remaining_buf;
@@ -479,9 +479,7 @@ static int
 b25_ioctl(const char *path, int cmd, void *arg,
 	  struct fuse_file_info *fi, unsigned int flags, void *data)
 {
-	struct secfilter_priv *priv = (struct secfilter_priv *)fi->fh;
 	int fd;
-	int is_demuxer = 0;
 
 	if (fuse_interrupted())
 		return -EINTR;
@@ -494,9 +492,11 @@ b25_ioctl(const char *path, int cmd, void *arg,
 #endif
 
 	if (!strncmp(path, "/demux", strlen("/demux"))) {
+		struct secfilter_priv *priv;
+
 		priv = (struct secfilter_priv *)fi->fh;
-		fd =priv->fd;
-		is_demuxer = 1;
+		fd = priv->fd;
+		secfilter_ioctl_hook(priv, cmd, data);
 	} else if (!strncmp(path, "/dvr", strlen("/dvr")))
 		fd = ((struct stream_priv *)fi->fh)->fd;
 	else
@@ -505,8 +505,6 @@ b25_ioctl(const char *path, int cmd, void *arg,
 	if (ioctl(fd, cmd, data))
 		return -errno;
 
-	if (is_demuxer)
-		secfilter_ioctl_hook(priv, cmd, data);
 	return 0;
 }
 

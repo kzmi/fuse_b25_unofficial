@@ -206,7 +206,7 @@ convert_text(uint8_t **src, int len, int *sleft, uint8_t **dst, int *dleft,
 {
 	int res;
 
-	res = aribstr_to_utf8(cd, (char *)*src, len, (char *)*dst, min(*dleft, max));
+	res = aribstr_to_utf16(cd, (char *)*src, len, (char *)*dst, min(*dleft, max));
 	if (res < 0) {
 		syslog(LOG_DEBUG, "failed to convert text in SI table.\n");
 		res = min(len, min(*dleft, max));

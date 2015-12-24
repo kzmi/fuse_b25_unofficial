@@ -27,8 +27,8 @@
 #include "convert.h"
 #include "secfilter.h"
 
-/* how log filter_loop sleep to wait for data. [nsec] */
-#define SECFILTER_WAIT_INTERVAL (500 * 1000000)
+/* how long the filter_loop waits for data ready. [msec] */
+#define SECFILTER_POLL_INTERVAL (200)
 
 static uint8_t section_buf[MAX_SECTION_SIZE];
 
@@ -86,7 +86,7 @@ push_secbuf(struct secfilter_priv *priv, const uint8_t *buf, size_t len)
 			syslog(LOG_DEBUG, "outbuf overflowed.\n");
 			l = len - (priv->outbuf_head - priv->outbuf_tail) + 1;
 			/* discard one or more section(s) */
-			if (priv->stype != SECTION_TYPE_NONE)
+			if (priv->stype != SECTION_TYPE_PES)
 				l = skip_by_sections(priv, l);
 
 			advance(&priv->outbuf_head, sizeof(priv->outbuf), l);
@@ -103,7 +103,7 @@ push_secbuf(struct secfilter_priv *priv, const uint8_t *buf, size_t len)
 				syslog(LOG_DEBUG, "outbuf overflowed.\n");
 				l = len - l - priv->outbuf_head + 1;
 				/* discard one or more section(s) */
-				if (priv->stype != SECTION_TYPE_NONE)
+				if (priv->stype != SECTION_TYPE_PES)
 					l = skip_by_sections(priv, l);
 
 				advance(&priv->outbuf_head,
@@ -127,57 +127,53 @@ direct_out(struct secfilter_priv *priv)
 {
 	unsigned int seclen;
 
-	if (priv->inbuf_len < 3)
+	if (priv->stype == SECTION_TYPE_PES) {
+		seclen = priv->inbuf_len;
+		if (seclen > 0)
+			goto output;
 		return;
+	}
+
+	if (priv->inbuf_len < 3)
+		goto baddata;
 	seclen = ((priv->inbuf[1] & 0x0f) << 8 | priv->inbuf[2]) + 3;
 	if (priv->inbuf_len < seclen)
-		return;
+		goto baddata;
 
+output:
 	push_secbuf(priv, priv->inbuf, seclen);
-	priv->inbuf_len = 0;
+	return;
+
+baddata:
+	syslog(LOG_INFO, "demux read() returned broken data. seclen:%u\n",
+	    seclen);
+	return;
 }
 
 /* similar to convert.c::convert_nit(), but not in-place */
 static void
 convert_nit_sec(struct secfilter_priv *priv)
 {
-	unsigned int seclen, newlen;
+	unsigned int seclen = 0, newlen;
 	uint8_t tid = priv->inbuf[0];
 
 	if (priv->inbuf_len < 3)
-		return;
+		goto baddata;
 
 	seclen = ((priv->inbuf[1] & 0x0f) << 8 | priv->inbuf[2]) + 3;
 	if (priv->inbuf_len < seclen || seclen < 16 ||
 	    (tid != TID_NIT_SELF && tid != TID_NIT_OTHERS) ||
 	    do_convert_nit(priv->inbuf, priv->inbuf_len,
-			section_buf, sizeof(section_buf), priv->iconv_cd)) {
-		syslog(LOG_INFO, "bad section data / data overlow in NIT.\n");
-		return;
-	}
+			section_buf, sizeof(section_buf), priv->iconv_cd))
+		goto baddata;
+
 	newlen = ((section_buf[1] & 0x0f) << 8 | section_buf[2]) + 3;
 	push_secbuf(priv, section_buf, newlen);
+	return;
 
-	/* pop off the current section and stuffing table if any. */
-	if (seclen < priv->inbuf_len) {
-		while (seclen < priv->inbuf_len && priv->inbuf[seclen] == 0xff)
-			seclen++;
-		if (seclen + 3 <= priv->inbuf_len &&
-		    priv->inbuf[seclen] == TID_ST) {
-			unsigned int stlen;
-
-			stlen = (priv->inbuf[seclen + 1] & 0x0f) << 8;
-			stlen += priv->inbuf[seclen + 2] + 3;
-			seclen += stlen;
-		}
-	}
-	syslog(LOG_DEBUG, "section(tid:%02hhx) + tail len:%d, buflen:%lu\n",
-		tid, seclen, priv->inbuf_len);
-	if (seclen < priv->inbuf_len) {
-		priv->inbuf_len -= seclen;
-		memmove(priv->inbuf, &priv->inbuf[seclen], priv->inbuf_len);
-	} else
-		priv->inbuf_len = 0;
+baddata:
+	syslog(LOG_INFO, "bad section data / overlow in NIT. seclen:%u\n",
+	    seclen);
 	return;
 }
 
@@ -188,82 +184,48 @@ convert_sdt_sec(struct secfilter_priv *priv)
 	uint8_t tid = priv->inbuf[0];
 
 	if (priv->inbuf_len < 3)
-		return;
+		goto baddata;
 
 	seclen = ((priv->inbuf[1] & 0x0f) << 8 | priv->inbuf[2]) + 3;
 	if (priv->inbuf_len < seclen || seclen < 15 ||
 	    (tid != TID_SDT_SELF && tid != TID_SDT_OTHERS) ||
 	    do_convert_sdt(priv->inbuf, priv->inbuf_len,
-			section_buf, sizeof(section_buf), priv->iconv_cd)) {
-		syslog(LOG_INFO, "bad section data / data overlow in SDT.\n");
-		return;
-	}
+			section_buf, sizeof(section_buf), priv->iconv_cd))
+		goto baddata;
+
 	newlen = ((section_buf[1] & 0x0f) << 8 | section_buf[2]) + 3;
 	push_secbuf(priv, section_buf, newlen);
+	return;
 
-	/* pop off the current section and stuffing table if any. */
-	if (seclen < priv->inbuf_len) {
-		while (seclen < priv->inbuf_len && priv->inbuf[seclen] == 0xff)
-			seclen++;
-		if (seclen + 3 <= priv->inbuf_len &&
-		    priv->inbuf[seclen] == TID_ST) {
-			unsigned int stlen;
-
-			stlen = (priv->inbuf[seclen + 1] & 0x0f) << 8;
-			stlen += priv->inbuf[seclen + 2] + 3;
-			seclen += stlen;
-		}
-	}
-	syslog(LOG_DEBUG, "section(tid:%02hhx) + tail len:%d, buflen:%lu\n",
-		tid, seclen, priv->inbuf_len);
-	if (seclen < priv->inbuf_len) {
-		priv->inbuf_len -= seclen;
-		memmove(priv->inbuf, &priv->inbuf[seclen], priv->inbuf_len);
-	} else
-		priv->inbuf_len = 0;
+baddata:
+	syslog(LOG_INFO, "bad section data / overlow in SDT. seclen:%u\n",
+	    seclen);
 	return;
 }
 
 static void
 convert_eit_sec(struct secfilter_priv *priv)
 {
-	unsigned int seclen, newlen;
+	unsigned int seclen = 0, newlen;
 	uint8_t tid = priv->inbuf[0];
 
 	if (priv->inbuf_len < 3)
-		return;
+		goto baddata;
 
 	seclen = ((priv->inbuf[1] & 0x0f) << 8 | priv->inbuf[2]) + 3;
 	if (priv->inbuf_len < seclen || seclen < 18 ||
 	    tid < TID_EITH_MIN || tid > TID_EITH_MAX ||
-	    do_convert_eit(priv->inbuf, priv->inbuf_len,
-				section_buf, sizeof(section_buf), TRUE, TRUE, priv->iconv_cd)) {
-		syslog(LOG_INFO, "bad section data / data overlow in EIT.\n");
-		return;
-	}
+	    do_convert_eit(priv->inbuf, priv->inbuf_len, section_buf,
+			sizeof(section_buf), TRUE, TRUE, priv->iconv_cd))
+		goto baddata;
+
 	newlen = ((section_buf[1] & 0x0f) << 8 | section_buf[2]) + 3;
 	push_secbuf(priv, section_buf, newlen);
+	return;
 
-	/* pop off the current section and stuffing table if any. */
-	if (seclen < priv->inbuf_len) {
-		while (seclen < priv->inbuf_len && priv->inbuf[seclen] == 0xff)
-			seclen++;
-		if (seclen + 3 <= priv->inbuf_len &&
-		    priv->inbuf[seclen] == TID_ST) {
-			unsigned int stlen;
-
-			stlen = (priv->inbuf[seclen + 1] & 0x0f) << 8;
-			stlen += priv->inbuf[seclen + 2] + 3;
-			seclen += stlen;
-		}
-	}
-	syslog(LOG_DEBUG, "section(tid:%02hhx) + tail len:%d, buflen:%lu\n",
-		tid, seclen, priv->inbuf_len);
-	if (seclen < priv->inbuf_len) {
-		priv->inbuf_len -= seclen;
-		memmove(priv->inbuf, &priv->inbuf[seclen], priv->inbuf_len);
-	} else
-		priv->inbuf_len = 0;
+baddata:
+	syslog(LOG_INFO, "bad section data / overlow in EIT. seclen:%u\n",
+	    seclen);
 	return;
 }
 
@@ -282,8 +244,6 @@ filter_loop(void *data)
 	struct secfilter_priv *priv = (struct secfilter_priv *)data;
 	struct pollfd pfd;
 	int err = 0;
-	struct timeval now;
-	struct timespec timeout;
 	enum sectype stype;
 
 	pthread_cleanup_push(filter_loop_cleanup, data);
@@ -293,54 +253,60 @@ filter_loop(void *data)
 
 	syslog(LOG_DEBUG, "filter_loop started. \n");
 
-	pthread_mutex_lock(&priv->filter_lock);
 	while (1) {
+		pthread_testcancel();
 		pfd.revents = 0;
-		err = poll(&pfd, 1, 0);
+		err = poll(&pfd, 1, SECFILTER_POLL_INTERVAL);
 		if (err < 0) {
 			priv->err = errno;
 			syslog(LOG_INFO, "failed to poll on demuxer.\n");
 			break;
-		} else if (err == 0) {
-			/* timeout.  wait SECFILTER_WAIT_INTERVAL[nsec] */
-			gettimeofday(&now, NULL);
-			timeout.tv_sec = now.tv_sec;
-			timeout.tv_nsec = now.tv_usec * 1000 +
-				SECFILTER_WAIT_INTERVAL;
-			if (timeout.tv_nsec > 1000000000) {
-				timeout.tv_nsec -= 1000000000;
-				timeout.tv_sec++;
-			}
-			/* use buf_cond as a sleep() with cancelling point */
-			pthread_cond_timedwait(&priv->buf_cond,
-				&priv->filter_lock, &timeout);
+		} else if (err == 0)
 			continue;
-		}
 
 		/* data ready or error */
-		/* error */
-		if ((pfd.revents & POLLERR) || (pfd.revents & POLLHUP) ||
-		    (pfd.revents & POLLNVAL)) {
+		/* error. */
+		/* but don't bailout if POLLERR, */
+		/*  which can indicate filter's timeout or broken data */
+		if ((pfd.revents & POLLHUP) || (pfd.revents & POLLNVAL)) {
 			syslog(LOG_INFO, "target device reported error.\n");
 			break;
 		}
 
-		err = (int) read(pfd.fd, priv->inbuf + priv->inbuf_len,
-			sizeof(priv->inbuf) - priv->inbuf_len);
+		/* according to DVB API, if the buffer is large enough, */
+		/* read() always returns the whole section */
+		err = (int) read(pfd.fd, priv->inbuf, sizeof(priv->inbuf));
 		syslog(LOG_DEBUG, "read ret:%d errno:%d.\n", err, errno);
-		if (err < 0 && errno == EAGAIN) {
+		if (err < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
 			continue;
-		} else if (err < 0) {
-			priv->err = errno;
-			break;
-		} else if (err == 0) {
-			priv->err = EBADF;
+
+		if (err <= 0) {
+			int e;
+
+			if (err == 0)
+				e = EBADF;
+			else
+				e = errno;
+
+			pthread_mutex_lock(&priv->filter_lock);
+			priv->err = e;
+			if (e != EBADF && e != EFAULT) {
+				if (priv->ph) {
+					fuse_notify_poll(priv->ph);
+					fuse_pollhandle_destroy(priv->ph);
+					priv->ph = NULL;
+				}
+				pthread_mutex_unlock(&priv->filter_lock);
+				continue;
+			}
+			pthread_mutex_unlock(&priv->filter_lock);
 			break;
 		}
-		priv->inbuf_len += err;
 
+		pthread_mutex_lock(&priv->filter_lock);
+		priv->err = 0;
+		priv->inbuf_len = err;
 		stype = priv->stype;
-
 		if (!priv->fs_priv->dmxraw && stype == SECTION_TYPE_NIT)
 			convert_nit_sec(priv);
 		else if (!priv->fs_priv->dmxraw && stype == SECTION_TYPE_SDT)
@@ -349,9 +315,11 @@ filter_loop(void *data)
 			convert_eit_sec(priv);
 		else
 			direct_out(priv);
+		pthread_mutex_unlock(&priv->filter_lock);
 	}
 
 	/* exiting */
+	pthread_mutex_lock(&priv->filter_lock);
 	if (!priv->err)
 		priv->err = ENODEV;
 	if (priv->ph) {
@@ -389,13 +357,17 @@ secfilter_ioctl_hook(struct secfilter_priv *priv, int cmd, void *data)
 		default:
 			priv->stype = SECTION_TYPE_NONE;
 		}
-		priv->inbuf_len = 0;
 		break;
 	case DMX_SET_PES_FILTER:
-		priv->stype = SECTION_TYPE_NONE;
-		priv->inbuf_len = 0;
+		priv->stype = SECTION_TYPE_PES;
 		break;
 	}
+	/* flush the buffers */
+	/* FIXME: invoke filter_loop here instead of this imperfect flushing */
+	priv->inbuf_len = 0;
+	priv->outbuf_head = priv->outbuf_tail = 0;
+	priv->remaining_len = 0;
+	priv->err = 0;
 	pthread_mutex_unlock(&priv->filter_lock);
 	syslog(LOG_DEBUG, "secfilter pid:%#04hx stype:%d\n", pid, priv->stype);
 	return 0;
@@ -428,6 +400,7 @@ release_secfilter(struct secfilter_priv *priv)
 	pthread_cancel(priv->filter_thread);
 	pthread_join(priv->filter_thread, NULL);
 
+	/* TODO: replace _trylock with pthread_mutex_lock() and test */
 	pthread_mutex_trylock(&priv->filter_lock);
 	if (priv->ph) {
 		priv->err = ENODEV;
