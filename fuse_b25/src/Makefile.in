@@ -32,7 +32,7 @@ POST_INSTALL = :
 NORMAL_UNINSTALL = :
 PRE_UNINSTALL = :
 POST_UNINSTALL = :
-bin_PROGRAMS = fuse_b25$(EXEEXT)
+bin_PROGRAMS = fuse_b25$(EXEEXT) fuse_b25.org$(EXEEXT)
 subdir = src
 DIST_COMMON = $(srcdir)/Makefile.am $(srcdir)/Makefile.in
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
@@ -50,6 +50,12 @@ am_fuse_b25_OBJECTS = b25.$(OBJEXT) bcas.$(OBJEXT) stream.$(OBJEXT) \
 fuse_b25_OBJECTS = $(am_fuse_b25_OBJECTS)
 am__DEPENDENCIES_1 =
 fuse_b25_DEPENDENCIES = $(am__DEPENDENCIES_1) $(am__DEPENDENCIES_1)
+am_fuse_b25_org_OBJECTS = b25.org.$(OBJEXT) bcas.$(OBJEXT) \
+	stream.$(OBJEXT) convert.$(OBJEXT) b24str.$(OBJEXT) \
+	demulti2.$(OBJEXT)
+fuse_b25_org_OBJECTS = $(am_fuse_b25_org_OBJECTS)
+fuse_b25_org_DEPENDENCIES = $(am__DEPENDENCIES_1) \
+	$(am__DEPENDENCIES_1)
 DEFAULT_INCLUDES = -I.@am__isrc@ -I$(top_builddir)
 depcomp = $(SHELL) $(top_srcdir)/depcomp
 am__depfiles_maybe = depfiles
@@ -58,8 +64,8 @@ COMPILE = $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) \
 	$(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
 CCLD = $(CC)
 LINK = $(CCLD) $(AM_CFLAGS) $(CFLAGS) $(AM_LDFLAGS) $(LDFLAGS) -o $@
-SOURCES = $(fuse_b25_SOURCES)
-DIST_SOURCES = $(fuse_b25_SOURCES)
+SOURCES = $(fuse_b25_SOURCES) $(fuse_b25_org_SOURCES)
+DIST_SOURCES = $(fuse_b25_SOURCES) $(fuse_b25_org_SOURCES)
 ETAGS = etags
 CTAGS = ctags
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
@@ -102,6 +108,7 @@ PACKAGE_BUGREPORT = @PACKAGE_BUGREPORT@
 PACKAGE_NAME = @PACKAGE_NAME@
 PACKAGE_STRING = @PACKAGE_STRING@
 PACKAGE_TARNAME = @PACKAGE_TARNAME@
+PACKAGE_URL = @PACKAGE_URL@
 PACKAGE_VERSION = @PACKAGE_VERSION@
 PATH_SEPARATOR = @PATH_SEPARATOR@
 PCSC_CFLAGS = @PCSC_CFLAGS@
@@ -164,8 +171,20 @@ fuse_b25_SOURCES = \
 	demulti2.c \
 	demulti2.h
 
+fuse_b25_org_SOURCES = \
+	b25.org.c \
+	bcas.c \
+	bcas.h \
+	stream.c \
+	stream.h \
+	convert.c \
+	b24str.c \
+	demulti2.c \
+	demulti2.h
+
 AM_CFLAGS = $(FUSE_CFLAGS) $(PCSC_CFLAGS)
 fuse_b25_LDADD = $(FUSE_LIBS) $(PCSC_LIBS)
+fuse_b25_org_LDADD = $(FUSE_LIBS) $(PCSC_LIBS)
 all: all-am
 
 .SUFFIXES:
@@ -240,6 +259,9 @@ clean-binPROGRAMS:
 fuse_b25$(EXEEXT): $(fuse_b25_OBJECTS) $(fuse_b25_DEPENDENCIES) 
 	@rm -f fuse_b25$(EXEEXT)
 	$(LINK) $(fuse_b25_OBJECTS) $(fuse_b25_LDADD) $(LIBS)
+fuse_b25.org$(EXEEXT): $(fuse_b25_org_OBJECTS) $(fuse_b25_org_DEPENDENCIES) 
+	@rm -f fuse_b25.org$(EXEEXT)
+	$(LINK) $(fuse_b25_org_OBJECTS) $(fuse_b25_org_LDADD) $(LIBS)
 
 mostlyclean-compile:
 	-rm -f *.$(OBJEXT)
@@ -249,6 +271,7 @@ distclean-compile:
 
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/b24str.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/b25.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/b25.org.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/bcas.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/convert.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/demulti2.Po@am__quote@

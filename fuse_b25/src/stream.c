@@ -117,11 +117,13 @@ parse_pat(struct stream_priv *priv, uint16_t pid)
 
 	pat->ver = ver;
 	pat->ts_id = ts_id;
-	pat->num_prog = pnum;
+	pat->num_prog = 0;
 	p = &sec->buf[8];
 	for (i = 0; i < pnum; i++) {
-		pat->program[i].prog_id = p[0] << 8 | p[1];
-		pat->program[i].pmt_pid = (p[2] << 8 | p[3]) & 0x1fff;
+		pat->program[pat->num_prog].prog_id = p[0] << 8 | p[1];
+		pat->program[pat->num_prog].pmt_pid = (p[2] << 8 | p[3]) & 0x1fff;
+		if (pat->program[pat->num_prog].prog_id != 0)
+			pat->num_prog++;
 		p += 4;
 	}
 	return;
@@ -236,7 +238,7 @@ parse_pmt(struct stream_priv *priv, uint16_t pid)
 
 	syslog(LOG_DEBUG, "new PMT for prog:%#06x, ver:%#04x, %d-pes's.\n",
 	       prog_id, ver, pmt->num_es);
-
+	return;
 
 bailout:
 	syslog(LOG_INFO, "received bad table for PMT.\n");
@@ -607,13 +609,19 @@ descramble(struct stream_priv *priv, uint8_t *buf,
 		pthread_mutex_unlock(&card->lock);
 		goto notready;
 	}
-	if (ecm->kinfo.status != CMD_S_VOID &&
-		ecm->kinfo.status != CMD_S_QUERYING &&
-		ecm->kinfo.status != CMD_S_FAILED)
-		demulti2(p, len, &card->param,
-			ecm->kinfo.wrk[(buf[3] & TS_CA_MASK) == TS_CA_EVEN]);
+	if (ecm->kinfo.status == CMD_S_VOID ||
+	    ecm->kinfo.status == CMD_S_QUERYING ||
+	    ecm->kinfo.status == CMD_S_FAILED) {
+		pthread_mutex_unlock(&card->lock);
+		goto notready;
+	}
+	demulti2(p, len, &card->param,
+		ecm->kinfo.wrk[(buf[3] & TS_CA_MASK) == TS_CA_EVEN]);
 	pthread_mutex_unlock(&card->lock);
 
+	if (!priv->output_start)
+		syslog(LOG_DEBUG, "descramle started.\n");
+	priv->output_start = 1;
 	buf[3] &= ~TS_CA_MASK;
 	return;
 
@@ -622,7 +630,7 @@ noscrambled:
 	return;
 
 notready:
-	syslog(LOG_DEBUG, " BCAS is not yet ready for de-scrambling.\n");
+//	syslog(LOG_DEBUG, " BCAS is not yet ready for de-scrambling.\n");
 	return;
 }
 
@@ -641,6 +649,11 @@ push_outbuf(struct stream_priv *priv, uint8_t *buf, size_t len)
 {
 	int l;
 
+	if (!priv->output_start) {
+		//syslog(LOG_DEBUG, "not yet prepared to outputuf, discarding data.\n");
+		return;
+	}
+
 	if (priv->outbuf_head > priv->outbuf_tail) {
 		l = sizeof(priv->outbuf) - priv->outbuf_tail;
 		if (l >= len)
@@ -651,7 +664,7 @@ push_outbuf(struct stream_priv *priv, uint8_t *buf, size_t len)
 		}
 		if (priv->outbuf_head - priv->outbuf_tail <= len) {
 			syslog(LOG_DEBUG, "outbuf overflowed.\n");
-			advance(&priv->outbuf_head, sizeof(priv->outbuf), len);
+			advance(&priv->outbuf_head, sizeof(priv->outbuf), 188);
 		}
 		advance(&priv->outbuf_tail, sizeof(priv->outbuf), len);
 	} else {
@@ -659,11 +672,11 @@ push_outbuf(struct stream_priv *priv, uint8_t *buf, size_t len)
 		if (l >= len)
 			memcpy(priv->outbuf + priv->outbuf_tail, buf, len);
 		else {
-			memcpy(priv->outbuf + priv->outbuf_tail, buf, l);				memcpy(priv->outbuf, buf + l, len - l);
+			memcpy(priv->outbuf + priv->outbuf_tail, buf, l);						memcpy(priv->outbuf, buf + l, len - l);
 			if (len -l >= priv->outbuf_head) {
 				syslog(LOG_DEBUG, "outbuf overflowed.\n");
 				advance(&priv->outbuf_head,
-					sizeof(priv->outbuf), len);
+					sizeof(priv->outbuf), 188);
 			}
 		}
 		advance(&priv->outbuf_tail, sizeof(priv->outbuf), len);
@@ -781,6 +794,16 @@ process_packet(struct stream_priv *priv, uint8_t *buf)
 				}
 			}
 		}
+		// for the packets with un-identified PID
+		if (buf[3] & TS_CA_MASK) {
+#if REPLACE_WITH_NULL
+			buf[1] |= 0x1f;
+			buf[2] = 0xff;
+			buf[3] &= ~TS_CA_MASK;
+#else
+			return;
+#endif
+		}
 	}
 
 done:
@@ -810,12 +833,11 @@ fetch_loop(void *data)
 			res = (int)read(priv->fd, p,
 					sizeof(priv->inbuf) - priv->inbuf_len);
 if (res < 1024) fprintf(stderr, "R%d\n", res);
+			if (res <= 0)
+				goto failed;
 			p += res;
 			priv->inbuf_len += res;
-		} while (res > 0 && priv->inbuf_len < min_read);
-
-		if (res <= 0)
-			goto failed;
+		} while (priv->inbuf_len < min_read);
 
 		p = priv->inbuf;
 		len = priv->inbuf_len;
@@ -833,6 +855,9 @@ if (res < 1024) fprintf(stderr, "R%d\n", res);
 		}
 
 		sched_yield();
+
+		/* to prohibit the cancel of this thread by release_stream() */
+		pthread_mutex_lock(&priv->cancel_lock);
 		/*
 		 * only push_outbuf() in process_packet() requires the lock,
 		 * but push_outbuf() is called every packet,
@@ -864,12 +889,13 @@ if (res < 1024) fprintf(stderr, "R%d\n", res);
 		if (priv->outbuf_head != priv->outbuf_tail) {
 			if (priv->ph != NULL) {
 				fuse_notify_poll(priv->ph);
-//				fuse_pollhandle_destroy(priv->ph);
-//				priv->ph = NULL;
+				fuse_pollhandle_destroy(priv->ph);
+				priv->ph = NULL;
 			}
 			pthread_cond_signal(&priv->buf_cond);
 		}
 		pthread_mutex_unlock(&priv->buf_lock);
+		pthread_mutex_unlock(&priv->cancel_lock);
 
 		/* move the remainder fragment to the head */
 		if (len > 0)
@@ -883,7 +909,8 @@ failed:
 		errno = EIO;
 	priv->err = errno;
 	pthread_cond_signal(&priv->buf_cond);
-	pthread_mutex_lock(&priv->buf_lock);
+	pthread_mutex_unlock(&priv->buf_lock);
+	syslog(LOG_INFO, " fuse_b25 fetch loop exited.\n");
 	return NULL;
 }
 
@@ -900,6 +927,7 @@ init_stream(struct stream_priv *priv)
 	priv->pat.ver = VER_NONE;
 	priv->cat.ver = VER_NONE;
 
+	pthread_mutex_init(&priv->cancel_lock, NULL);
 	pthread_mutex_init(&priv->buf_lock, NULL);
 	pthread_cond_init(&priv->buf_cond, NULL);
 	res = pthread_create(&priv->fetch_thread, NULL, fetch_loop, priv);
@@ -923,11 +951,18 @@ void
 release_stream(struct stream_priv *priv)
 {
 	int i;
+	struct bcas *card = &priv->fs_priv->card;
 
-	if (!pthread_cancel(priv->fetch_thread)) {
-		pthread_mutex_unlock(&priv->buf_lock);
-		pthread_join(priv->fetch_thread, NULL);
-	}
+	pthread_mutex_lock(&priv->cancel_lock);
+	pthread_cancel(priv->fetch_thread);
+	pthread_mutex_unlock(&priv->cancel_lock);
+
+	pthread_mutex_lock (&card->lock);
+	card->cmd_len = BCAS_RESET_REQUEST; // tells BCAS to reset
+	pthread_cond_broadcast(&card->cond);
+	pthread_mutex_unlock(&card->lock);
+
+	pthread_join(priv->fetch_thread, NULL);
 
 	if (priv->fs_priv->conv && priv->iconv_cd != (iconv_t)-1)
 		iconv_close(priv->iconv_cd);

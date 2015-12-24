@@ -1,5 +1,6 @@
 %define __find_requires %{nil}
 %define _prefix /usr/local
+%define devtool b25dvr
 
 Name:           fuse_b25
 Version:        @PACKAGE_VERSION@
@@ -35,11 +36,13 @@ make %{?_smp_mflags}
 %install
 rm -rf $RPM_BUILD_ROOT
 make install DESTDIR=$RPM_BUILD_ROOT
+rm $RPM_BUILD_ROOT%{_bindir}/fuse_b25.org
+rm $RPM_BUILD_ROOT%{_sbindir}/rendvr0
 install -d $RPM_BUILD_ROOT%{_sysconfdir}/pam.d
-install -p -m 0644 helper/pam.d/rendvr0 $RPM_BUILD_ROOT%{_sysconfdir}/pam.d/rendvr0
+install -p -m 0644 helper/pam.d/%{devtool} $RPM_BUILD_ROOT%{_sysconfdir}/pam.d/
 install -d $RPM_BUILD_ROOT%{_sysconfdir}/security/console.apps
-install -p -m 0644 helper/console.apps/rendvr0 $RPM_BUILD_ROOT%{_sysconfdir}/security/console.apps/rendvr0
-ln -s /usr/bin/consolehelper $RPM_BUILD_ROOT%{_bindir}/rendvr0
+install -p -m 0644 helper/console.apps/%{devtool} $RPM_BUILD_ROOT%{_sysconfdir}/security/console.apps/
+ln -s /usr/bin/consolehelper $RPM_BUILD_ROOT%{_bindir}/%{devtool}
 
 %clean
 rm -rf $RPM_BUILD_ROOT
@@ -48,13 +51,20 @@ rm -rf $RPM_BUILD_ROOT
 %files
 %defattr(-,root,root,-)
 %doc AUTHORS COPYING ChangeLog NEWS README
+%doc helper/80-dvr-b25.rules helper/rendvr0 src/fuse_b25.org
 %{_bindir}/%{name}
-%{_bindir}/rendvr0
-%{_sbindir}/rendvr0
-%config %{_sysconfdir}/security/console.apps/rendvr0
-%config %{_sysconfdir}/pam.d/rendvr0
+%{_bindir}/%{devtool}
+%{_sbindir}/%{devtool}
+%config %{_sysconfdir}/security/console.apps/%{devtool}
+%config %{_sysconfdir}/pam.d/%{devtool}
 
 
 %changelog
+* Mon Dec 6 2010 0p1pp1 - 0.2.1-1
+- updated to ver. 0.2.1
+
+* Fri Sep 17 2010 0p1pp1 - 0.2-1
+- updated to ver.0.2
+
 * Fri Dec 11 2009 0p1pp1 - 0.1
 - initial release

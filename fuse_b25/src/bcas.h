@@ -18,6 +18,8 @@
 #define BCAS_MAX_CARDID 8
 #define BCAS_MAX_MSG_LEN 266
 
+#define BCAS_QUIT_REQUEST -1
+#define BCAS_RESET_REQUEST -2
 
 struct bcas {
 	char *iccname;

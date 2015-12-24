@@ -1,15 +1,19 @@
 #GOTO="skipme"
 
-# re-name dvr0, for FUSE b25
-SUBSYSTEM=="dvb", ENV{DVB_ADAPTER_NUM}=="?*", KERNEL=="dvb*.dvr0", NAME="dvb/adapter$env{DVB_ADAPTER_NUM}/dvr_b25", GROUP="video"
-SUBSYSTEM=="dvb", ENV{DVB_ADAPTER_NUM}=="", KERNEL=="dvb*.dvr0", PROGRAM="/bin/sh -c 'K=%k; K=$${K#dvb}; printf dvb/adapter%%i/dvr0 $${K%%%%.*}'", NAME="%c", GROUP="video"
+#
+# copy for FUSE b25, only works for 2.6.31+??
+# you can add further conditions to restrict the devices
+#
+SUBSYSTEM=="dvb", ACTION=="add", ENV{DVB_DEVICE_TYPE}!="dvr", PROGRAM="/bin/sh -c 'NUM=$$(($env{DVB_ADAPTER_NUM} + 8)); /bin/mkdir /dev/dvb/adapter$${NUM} 2>/dev/null ; echo -n $$NUM'", SYMLINK+="dvb/adapter$result/$env{DVB_DEVICE_TYPE}$env{DVB_DEVICE_NUM}"
 
-# add mount-point & mount
-SUBSYSTEM=="dvb", ACTION=="add", NAME=="dvb/adapter?*/dvr_b25", RUN+="/bin/sh -c 'N=$name; N=/dev/$${N%%dvr_b25}dvr0; touch $${N} && chgrp video $${N} && chmod 0664 $${N} && /usr/local/bin/fuse_b25 $${N} -oallow_other'"
+SUBSYSTEM=="dvb", ACTION=="add", ENV{DVB_DEVICE_TYPE}=="dvr", RUN+="/bin/sh -c 'ADP=/dev/dvb/adapter$$(($env{DVB_ADAPTER_NUM} + 8)); /bin/mkdir $$ADAP 2>/dev/null; /usr/bin/install -g video -m 0660 /dev/null $${ADP}/dvr$env{DVB_DEVICE_NUM} && /usr/local/bin/fuse_b25 $${ADP}/dvr$env{DVB_DEVICE_NUM} -o allow_other'"
+# no fuse_b25 mount version
+#SUBSYSTEM=="dvb", ACTION=="add", ENV{DVB_DEVICE_TYPE}=="dvr", RUN+="/bin/sh -c 'ADP=/dev/dvb/adapter$$(($env{DVB_ADAPTER_NUM} + 8)); /bin/mkdir $$ADAP 2>/dev/null; /usr/bin/install -g video -m 0660 /dev/null $${ADP}/dvr$env{DVB_DEVICE_NUM}'"
 
 # unmount & remove mount-point.
-# somehow, NAME prop does not match here.
-SUBSYSTEM=="dvb", ACTION=="remove", ENV{DVB_ADAPTER_NUM}=="?*", KERNEL=="dvb*.dvr0", PROGRAM="/bin/sh -c 'N=$name; N=/dev/dvb/adapter$env{DVB_ADAPTER_NUM}/dvr0; /usr/sbin/fusermount -u $${N}; rm -f $${N}'"
-SUBSYSTEM=="dvb", ACTION=="remove", ENV{DVB_ADAPTER_NUM}=="", KERNEL=="dvb*.dvr0", PROGRAM="/bin/sh -c 'K=%k; K=$${K#dvb}; N=/dev/dvb/adapter$${K%%%%.*}/dvr0; /usr/sbin/fusermount -u $${N}; rm -f $${N}'"
+SUBSYSTEM=="dvb", ACTION=="remove", ENV{DVB_DEVICE_TYPE}=="dvr", RUN+="/bin/sh -c 'DVR=/dev/dvb/adapter$$(($env{DVB_ADAPTER_NUM} + 8))/dvr$env{DVB_DEVICE_NUM}; /bin/umount $${DVR}; /bin/rm -f $${DVR}; /bin/rmdir $${DVR%%/dvr*} 2>/dev/null'"
+
+# no unmount version
+#SUBSYSTEM=="dvb", ACTION=="remove", ENV{DVB_DEVICE_TYPE}=="dvr", RUN+="/bin/sh -c 'DVR=/dev/dvb/adapter$$(($env{DVB_ADAPTER_NUM} + 8))/dvr$env{DVB_DEVICE_NUM}; /bin/rm -f $${DVR}; /bin/rmdir $${DVR%%/dvr*} 2>/dev/null'"
 
 LABEL="skipme"

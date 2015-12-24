@@ -163,6 +163,7 @@ PACKAGE_BUGREPORT = @PACKAGE_BUGREPORT@
 PACKAGE_NAME = @PACKAGE_NAME@
 PACKAGE_STRING = @PACKAGE_STRING@
 PACKAGE_TARNAME = @PACKAGE_TARNAME@
+PACKAGE_URL = @PACKAGE_URL@
 PACKAGE_VERSION = @PACKAGE_VERSION@
 PATH_SEPARATOR = @PATH_SEPARATOR@
 PCSC_CFLAGS = @PCSC_CFLAGS@
@@ -215,12 +216,12 @@ top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
 SUBDIRS = src
-dist_sbin_SCRIPTS = helper/rendvr0
+dist_sbin_SCRIPTS = helper/rendvr0 helper/b25dvr
 EXTRA_DIST = AUTHORS COPYING ChangeLog INSTALL NEWS README \
 	fuse_b25.spec.in \
 	helper/80-dvr-b25.rules \
-	helper/console.apps/rendvr0 \
-	helper/pam.d/rendvr0
+	helper/console.apps/rendvr0 helper/console.apps/b25dvr \
+	helper/pam.d/rendvr0 helper/pam.d/b25dvr
 
 all: config.h
 	$(MAKE) $(AM_MAKEFLAGS) all-recursive

@@ -1,3 +1,9 @@
+* Sep. 17 2010 - ver.0.2
+changed the mapping from mount-point to the original dvr dev.
+
+* Jul. 8 2010
+fixed mutex locking bug in error handling
+
 * Apr. 19 2010
 fixed text conversion error
 

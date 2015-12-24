@@ -1,0 +1,58 @@
+#!/bin/bash
+# usage: b25dvr <orig_adapter#> [<new_adapter#>]
+#   makes the /dev/dvb/adapter<new_adapter#> dir that contains
+#   the dvr subdevices which can be mounted by fuse_b25,
+#   and the non-dvr subdevices which are symlinks to the original.
+#   if new_adapter# is not specified, (orig_adapter# + 8) is used.
+#
+#  new_adapter is just the set of symlinks and empty dirs, 
+#   thus you can remove the whole adapter dir by rm -r,
+#   after you finished using the new adapter device. 
+#
+# requires write permission to /dev/dvb, /dev/dvb/adapterN.
+# to run this script from the console user,
+# put this script under /usr/local/sbin and
+#  ln -s /usr/bin/consolehelper /usr/local/bin/b25dvr
+#  and copy the relevant files to
+#               /etc/security/console.apps/b25dvr,/etc/pam.d/b25dvr
+
+orig_adapter=$1
+new_adapter=$2
+
+function usage () {
+	echo $"Usage: ${0##*/} orig_adapter#  [new_adapter#]"
+	echo "    makes the fuse_b25 mount point for orig_adapter."
+	echo "ex."
+	echo " sudo ${0##*/} 1"
+	echo " fuse_b25 /dev/dvb/adapter9/dvr0" 
+	echo " mplayer dvb://9@NHK"
+	echo " fusermount -u /dev/dvb/adapter9/dvr0"
+	echo " sudo rm -rf /dev/dvb/adapter9" 
+	exit 1
+}
+
+if [ $# -lt 1 ] || [ x"$1" == x"-h" ] || [ x"$1" == x"--help" ]; then
+	usage
+fi
+
+if [ x"$orig_adapter" != x ] && [ x"$new_adapter" == x ]; then
+	new_adapter=$(($orig_adapter + 8))
+fi
+
+
+[ -d "/dev/dvb/adapter$orig_adapter" ] || usage
+[ -e "/dev/dvb/adapter$new_adapter" ] && usage
+
+mkdir "/dev/dvb/adapter$new_adapter" || \
+    { echo "can't mkdir /dev/dvb/adapter$new_adapter"; exit 1; }
+
+for i in /dev/dvb/adapter$orig_adapter/*; do
+	item=${i##*/}
+	if [ x"${item#dvr}" == x"${item}" ]; then
+		ln -s "/dev/dvb/adapter$orig_adapter/$item" "/dev/dvb/adapter$new_adapter/$item"
+	else
+		touch "/dev/dvb/adapter$new_adapter/$item" || exit 1
+		chown root.video "/dev/dvb/adapter$new_adapter/$item"
+		chmod 0664 "/dev/dvb/adapter$new_adapter/$item"
+	fi
+done

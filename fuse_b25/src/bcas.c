@@ -120,7 +120,7 @@ get_card (SCARDCONTEXT cxt, SCARDHANDLE * h, char * iccname)
 
 /* init card and set some ID infos */
 static int
-bcas_card_setup (struct bcas * card)
+bcas_card_setup (struct bcas * card, int in_retrying)
 {
   LONG ret;
   DWORD protocol, rlen;
@@ -136,13 +136,23 @@ bcas_card_setup (struct bcas * card)
   static const uint8_t init_cmd[] = { 0x90, 0x30, 0x00, 0x00, 0x00 };
   static const uint8_t cardinfo_cmd[] = { 0x90, 0x32, 0x00, 0x00, 0x00 };
 
+  int myLOG_NOTICE, myLOG_INFO;
+
+  if (in_retrying) {
+    myLOG_NOTICE = LOG_DEBUG;
+    myLOG_INFO = LOG_DEBUG;
+  } else {
+    myLOG_NOTICE = LOG_NOTICE;
+    myLOG_INFO = LOG_INFO;
+  }
+
 //  card->status = CARD_S_NG;
 
 //  SCardSetTimeout (info->cxt, 3);
 
   name = get_card (card->cxt, &card->hcard, card->iccname);
   if (!name) {
-    syslog (LOG_NOTICE, "Failed to find an available BCAS card.\n");
+    syslog (myLOG_NOTICE, "Failed to find an available BCAS card.\n");
     goto bailout;
   }
   free(name);
@@ -155,7 +165,7 @@ bcas_card_setup (struct bcas * card)
         &rpci, rspbuf, &rlen);
     if (ret == SCARD_W_RESET_CARD) {
       ret = SCardReconnect (card->hcard, SCARD_SHARE_SHARED, SCARD_PROTOCOL_T1,
-          SCARD_LEAVE_CARD, &protocol);
+          SCARD_RESET_CARD, &protocol);
     }
     if (ret == SCARD_S_SUCCESS)
       break;
@@ -163,7 +173,7 @@ bcas_card_setup (struct bcas * card)
     nanosleep (&wt1, NULL);
   }
   if (retry == 3 || rlen < 59) {
-    syslog (LOG_INFO, "Failed to initialize the card.\n");
+    syslog (myLOG_INFO, "Failed to initialize the card.\n");
     goto bailout;
   }
   cas_id = rspbuf[6] << 8 | rspbuf[7];
@@ -171,7 +181,7 @@ bcas_card_setup (struct bcas * card)
       rspbuf[1] < 55 || (rspbuf[4] << 8 | rspbuf[5]) != CARD_RETCODE_OK ||
       (cas_id != CA_SYSTEM_ID_ARIB && cas_id != CA_SYSTEM_ID_ARIB_B) ||
       rspbuf[14] != CARD_TYPE_GENERAL) {
-    syslog (LOG_INFO, "Got bad response for the card init command.\n");
+    syslog (myLOG_INFO, "Got bad response for the card init command.\n");
     goto bailout;
   }
   card->cas_id = cas_id;
@@ -206,14 +216,14 @@ bcas_card_setup (struct bcas * card)
     nanosleep (&wt1, NULL);
   }
   if (retry == 3 || rlen < 19) {
-    syslog (LOG_INFO, "Failed to get info from the the card.\n");
+    syslog (myLOG_INFO, "Failed to get info from the the card.\n");
     goto bailout;
   }
 
   if (rspbuf[rlen - 2] != CARD_SW1_OK || rspbuf[rlen - 1] != CARD_SW2_OK ||
       rspbuf[1] < 15 || (rspbuf[4] << 8 | rspbuf[5]) != CARD_RETCODE_OK ||
       rspbuf[6] < 1 || rspbuf[6] > 8) {
-    syslog (LOG_INFO, "Got bad response for the card info command.\n");
+    syslog (myLOG_INFO, "Got bad response for the card info command.\n");
     goto bailout;
   }
 
@@ -225,7 +235,7 @@ bcas_card_setup (struct bcas * card)
   return 0;
 
 bailout:
-  syslog (LOG_NOTICE, "BCAS card not available.\n");
+  syslog (myLOG_NOTICE, "BCAS card not available.\n");
   return -1;
 }
 
@@ -257,6 +267,17 @@ do_io_loop(struct bcas *card)
     card->cmd_len = 0;
     pthread_mutex_unlock (&card->lock);
 
+    if (clen == BCAS_RESET_REQUEST) {
+      syslog (LOG_DEBUG, "resetting the card.\n");
+      ret = SCardReconnect (card->hcard, SCARD_SHARE_SHARED, SCARD_PROTOCOL_T1,
+          SCARD_RESET_CARD, &protocol);
+      if (ret == SCARD_S_SUCCESS)
+        syslog (LOG_DEBUG, "BCAS card has been reset.\n");
+      else
+        syslog (LOG_INFO, "BCAS failed to reset. ret=%d.\n", ret);
+      continue;
+    }
+
     if (clen < 0 || card->status == CARD_S_NG)
       break;
 
@@ -272,10 +293,15 @@ do_io_loop(struct bcas *card)
     if (ret == SCARD_W_RESET_CARD) {
       syslog (LOG_INFO, "resetting the card.\n"); 
       ret = SCardReconnect (card->hcard, SCARD_SHARE_SHARED, SCARD_PROTOCOL_T1,
-          SCARD_LEAVE_CARD, &protocol);
+          SCARD_RESET_CARD, &protocol);
+      if (ret == SCARD_S_SUCCESS) {
+        syslog (LOG_INFO, "BCAS card has been reset.\n");
+        goto failed;
+      }
     }
 
     if (ret != SCARD_S_SUCCESS) {
+      syslog (LOG_INFO, "the last card cmd failed.\n");
       if (++retry >= 3) {
         syslog (LOG_NOTICE, "Failed to retry card command %d times.\n", retry);
         goto bailout;
@@ -288,6 +314,7 @@ do_io_loop(struct bcas *card)
         syslog (LOG_INFO, "Failed to reset the card.\n");
         goto bailout;
       } else {
+        syslog (LOG_INFO, "BCAS card has been reset.\n");
         goto failed;
       }
     }
@@ -298,7 +325,8 @@ do_io_loop(struct bcas *card)
         rspbuf[rlen - 2] != CARD_SW1_OK || rspbuf[rlen - 1] != CARD_SW2_OK) {
       syslog (LOG_INFO,
         "Got a bad response from the card. len:%ld, SW1/2:[0x%02X%02X].\n",
-        rlen, rspbuf[rlen - 2], rspbuf[rlen - 1]);
+        rlen,
+        rlen >= 2 ? rspbuf[rlen - 2] : 0, rlen >= 1 ? rspbuf[rlen - 1] : 0);
       goto bailout;
     }
 
@@ -500,10 +528,12 @@ void *
 bcas_card_io(void *arg)
 {
 	struct bcas *card = arg;
-	struct timespec wt = {BCAS_RETRY_WAIT, 0};
+	struct timespec wt;
+	struct timeval now;
 	int stop;
 	LONG ret;
 	int res;
+	int in_retrying = 0;
 
 	pthread_mutex_lock(&card->lock);
 	while (1) {
@@ -514,25 +544,30 @@ bcas_card_io(void *arg)
 		ret = SCardEstablishContext(SCARD_SCOPE_SYSTEM,
 					    NULL, NULL, &card->cxt);
 		if (ret != SCARD_S_SUCCESS) {
-			syslog(LOG_NOTICE, "Can't connect to pcscd:%s.\n",
+			syslog(in_retrying ? LOG_DEBUG : LOG_NOTICE,
+				"Can't connect to pcscd:%s.\n",
 				pcsc_stringify_error (ret));
 			goto retry;
   		}
 
-		res = bcas_card_setup(card);
+		res = bcas_card_setup(card, in_retrying);
 		if (res != 0)
 			goto retry;
+		in_retrying = 0;
 		/* assert(card->status == CARD_S_OK) */
 		pthread_mutex_unlock(&card->lock);
 		do_io_loop(card);
 		pthread_mutex_lock(&card->lock);
 
 retry:
-		card->status == CARD_S_NG;
+		in_retrying = 1;
 		if (card->hcard)
 			SCardDisconnect (card->hcard, SCARD_RESET_CARD);
 		card->hcard = 0;
 		SCardReleaseContext (card->cxt);
+		gettimeofday(&now, NULL);
+		wt.tv_sec = now.tv_sec + BCAS_RETRY_WAIT;
+		wt.tv_nsec = now.tv_usec * 1000;
 		if (card->stop == 0)
 			pthread_cond_timedwait(&card->cond, &card->lock, &wt);
 	}
@@ -558,7 +593,7 @@ bcas_destroy(struct bcas *card)
 
 	pthread_mutex_lock (&card->lock);
 	card->stop = 1;
-	card->cmd_len = -1; // tells the thread to quit
+	card->cmd_len = BCAS_QUIT_REQUEST; // tells the thread to quit
 	pthread_cond_broadcast(&card->cond);
 	pthread_mutex_unlock(&card->lock);
 	//pthread_cancel(card->thread);

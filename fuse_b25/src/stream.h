@@ -58,6 +58,7 @@
 #define VER_NONE 0x80
 
 struct options {
+	char *target; /* name of the target dvr device */
 	char *card_name;
 	int emm;  /* flag to process EMM */
 	int conv; /* flag to convert NIT, SDT */
@@ -158,10 +159,13 @@ struct stream_priv {
 
 	int err; // last errno
 
+	int output_start; // whether descrambled output had started
+
 	pthread_mutex_t buf_lock;
 	pthread_cond_t buf_cond;
 	pthread_t fetch_thread; //fetch (and poll-notify) loop 
 	struct fuse_pollhandle *ph; // for poll
+	pthread_mutex_t cancel_lock;
 
 	iconv_t iconv_cd; // for text conversion
 };

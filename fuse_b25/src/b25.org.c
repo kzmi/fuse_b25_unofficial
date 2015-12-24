@@ -38,7 +38,6 @@ struct options b25_priv;
 
 static struct fuse_opt b25_opts[] =
 {
-	{"--target %s", offsetof(struct options, target), 0},
 	{"--card %s", offsetof(struct options, card_name), 0},
 	{"--noemm", offsetof(struct options, emm), 0},
 	{"--conv", offsetof(struct options, conv), 1},
@@ -326,33 +325,8 @@ main(int argc, char **argv)
 		return 1;
 	}
 
-	if (b25_priv.target) {
-		res = readlink(b25_priv.target, b25_priv.dvr_name, sizeof(b25_priv.dvr_name));
-		if (res == -1 && errno == EINVAL) {
-			strncpy(b25_priv.dvr_name, b25_priv.target, sizeof(b25_priv.dvr_name));
-			b25_priv.dvr_name[sizeof(b25_priv.dvr_name) - 1] = '\x0';
-			res = strlen(b25_priv.dvr_name);
-		}
-		if (res >= 0 && res + 1 < sizeof(b25_priv.dvr_name))
-			b25_priv.dvr_name[res] = '\x0';
-		else
-			b25_priv.dvr_name[sizeof(b25_priv.dvr_name) - 1] = '\x0';
-
-		res = sscanf(b25_priv.dvr_name, "/dev/dvb/adapter%u/dvr%u", &t_adap, &t_dvr);
-		if (res != 2 || (t_adap == adapter && t_dvr == dvr))
-			res = -1;
-		else
-			res = 0;
-	} else {
-		// default mapping: 
-		// /dev/dvb/adapterN/dvrX <- /dev/dvb/adapter(8+N)/dvrX or
-		if (adapter >= 8)
-			res = snprintf(b25_priv.dvr_name, sizeof(b25_priv.dvr_name),
-				       "/dev/dvb/adapter%u/dvr%u", adapter - 8, dvr);
-		else
-			res = -1;
-	}
-
+	res = snprintf(b25_priv.dvr_name, sizeof(b25_priv.dvr_name),
+		      "/dev/dvb/adapter%u/dvr_b25", adapter);
 	if (res < 0 
 #if HAVE_EACCESS
 	    || eaccess(b25_priv.dvr_name, R_OK) != 0
