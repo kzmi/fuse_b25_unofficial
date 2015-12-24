@@ -1,0 +1,60 @@
+%define __find_requires %{nil}
+%define _prefix /usr/local
+
+Name:           fuse_b25
+Version:        @PACKAGE_VERSION@
+Release:        1%{?dist}
+Summary:        FUSE filesystem to descramble streams from ISDB-T/S DVB devices
+
+Group:          Applications/System
+License:        GPL
+Source0:        %{name}-%{version}.tar.gz
+BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
+
+BuildRequires:  fuse-devel >= 2.8, pcsc-lite-devel
+Requires:       fuse >= 2.8, pcsc-lite
+Prefix:         %{_prefix}
+Prefix:         %{_sysconfdir}
+
+%description
+Fuse filesystems which mounts on a backed-up /dev/dvb/adapterN/dvr0 and
+relays output streams from the real device to standard DVB applications,
+as well as descrambling MULTI2 with pcscd.
+ 
+this package includes a helper script to backup/restore the real dvr0 device.
+
+%prep
+%setup -q
+
+
+%build
+%configure
+make %{?_smp_mflags}
+
+
+%install
+rm -rf $RPM_BUILD_ROOT
+make install DESTDIR=$RPM_BUILD_ROOT
+install -d $RPM_BUILD_ROOT%{_sysconfdir}/pam.d
+install -p -m 0644 helper/pam.d/rendvr0 $RPM_BUILD_ROOT%{_sysconfdir}/pam.d/rendvr0
+install -d $RPM_BUILD_ROOT%{_sysconfdir}/security/console.apps
+install -p -m 0644 helper/console.apps/rendvr0 $RPM_BUILD_ROOT%{_sysconfdir}/security/console.apps/rendvr0
+ln -s /usr/bin/consolehelper $RPM_BUILD_ROOT%{_bindir}/rendvr0
+
+%clean
+rm -rf $RPM_BUILD_ROOT
+
+
+%files
+%defattr(-,root,root,-)
+%doc AUTHORS COPYING ChangeLog NEWS README
+%{_bindir}/%{name}
+%{_bindir}/rendvr0
+%{_sbindir}/rendvr0
+%config %{_sysconfdir}/security/console.apps/rendvr0
+%config %{_sysconfdir}/pam.d/rendvr0
+
+
+%changelog
+* Fri Dec 11 2009 0p1pp1 - 0.1
+- initial release

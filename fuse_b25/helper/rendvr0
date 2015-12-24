@@ -1,0 +1,44 @@
+#!/bin/bash
+# usage: rendvr0 [-u] [-a <adapter#>]
+#   if -a option is not specified, targets all adapters possible
+#
+# requires write permission to dvb/adapterN.
+# to run this script from the console user,
+# put this script under /usr/local/sbin and
+#  ln -s /usr/bin/consolehelper /usr/local/bin/rendvr0
+#  and copy the relevant files to
+#               /etc/security/console.apps/rendvr0,/etc/pam.d/rendvr0
+
+restore=0
+adapter=
+
+while [ -n "$1" ]; do
+	case "$1" in
+	-a)
+		shift
+		adapter=$1
+		shift
+		;;
+	-u|-r)
+		restore=1
+		shift
+		;;
+	*)
+		echo $"Usage: ${0##*/} [-a adapter#] [-u/-r]"
+		exit 1
+		;;
+	esac
+done
+
+for dir in /dev/dvb/adapter?*; do
+	if [ x"$adapter" = x -o x"$dir" = x"/dev/dvb/adapter$adapter" ]; then
+		if [ x"$restore" = x1 ]; then
+			[ ! -e $dir/dvr_b25 ] || cd $dir && mv -f dvr_b25 dvr0
+		else
+			[ -e $dir/dvr_b25 ] || cd $dir && mv dvr0 dvr_b25 && touch dvr0 && chmod 0660 dvr0 && chown root.video dvr0
+		fi
+		if [ ! $? ] ; then
+			echo "Failed to rename/restore $dir." >&2
+		fi
+	fi
+done

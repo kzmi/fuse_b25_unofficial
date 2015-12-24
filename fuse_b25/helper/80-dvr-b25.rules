@@ -1,0 +1,15 @@
+#GOTO="skipme"
+
+# re-name dvr0, for FUSE b25
+SUBSYSTEM=="dvb", ENV{DVB_ADAPTER_NUM}=="?*", KERNEL=="dvb*.dvr0", NAME="dvb/adapter$env{DVB_ADAPTER_NUM}/dvr_b25", GROUP="video"
+SUBSYSTEM=="dvb", ENV{DVB_ADAPTER_NUM}=="", KERNEL=="dvb*.dvr0", PROGRAM="/bin/sh -c 'K=%k; K=$${K#dvb}; printf dvb/adapter%%i/dvr0 $${K%%%%.*}'", NAME="%c", GROUP="video"
+
+# add mount-point & mount
+SUBSYSTEM=="dvb", ACTION=="add", NAME=="dvb/adapter?*/dvr_b25", RUN+="/bin/sh -c 'N=$name; N=/dev/$${N%%dvr_b25}dvr0; touch $${N} && chgrp video $${N} && chmod 0664 $${N} && /usr/local/bin/fuse_b25 $${N} -oallow_other'"
+
+# unmount & remove mount-point.
+# somehow, NAME prop does not match here.
+SUBSYSTEM=="dvb", ACTION=="remove", ENV{DVB_ADAPTER_NUM}=="?*", KERNEL=="dvb*.dvr0", PROGRAM="/bin/sh -c 'N=$name; N=/dev/dvb/adapter$env{DVB_ADAPTER_NUM}/dvr0; /usr/sbin/fusermount -u $${N}; rm -f $${N}'"
+SUBSYSTEM=="dvb", ACTION=="remove", ENV{DVB_ADAPTER_NUM}=="", KERNEL=="dvb*.dvr0", PROGRAM="/bin/sh -c 'K=%k; K=$${K#dvb}; N=/dev/dvb/adapter$${K%%%%.*}/dvr0; /usr/sbin/fusermount -u $${N}; rm -f $${N}'"
+
+LABEL="skipme"

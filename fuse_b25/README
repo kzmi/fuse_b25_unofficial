@@ -1,0 +1,110 @@
+fuse_b25
+/dev/dvb/adapterN/dvr0 にマウントして MULTI2復号をするFUSEファイルシステム.
+プレーヤ等のアプリには 普通の(スクランブルしていない)DVBとして見えるため
+復号パッチ当てが不要で そのまま使用できる.
+ファイルシステムと言っても１つのファイル(dvr0)にマウントし
+そのファイルしか見せない特殊な形態.
+バックアップした本来のdvr0デバイス(dvr_b25) へのI/Oを中継しMULTI2復号する.
+
+使い方
+I. マウント
+step 0: バックアップ+マウントポイント作成
+        (dvr0->dvr_b25, 通常ファイル"dvr0"作成)
+sudo mv /dev/dvb/adapterN/dvr0 /dev/dvb/adapterN/dvr_b25
+sudo touch /dev/dvb/atapterN/dvr0
+sudo chgrp video /dev/dvb/adapterN/dvr0
+sudo chmod 0664 /dev/dvb/adapterN/dvr0
+
+step 1: マウント
+fuse_b25 /dev/dvb/adapterN/dvr0 [-oallow_other] [--conv] [--eit]
+
+あとは通常どおりmplayer dvb://NHK とか xine dvb://NHK ... とかmythtv起動とか
+
+II. アンマウント
+step 0: アンマウント
+fusermount -u /dev/dvb/adapterN/dvr0
+
+step 1: バックアップの復元
+sudo mv /dev/dvb/adapterN/dvr_b25 /dev/dvb/adapterN/dvr0
+
+
+オプション:
+-oallow_other	マウントしたユーザ以外にもアクセスを認める
+--conv		NITとSDT内のテキストをUTF-8に変換する
+--eit		EIT内のテキストをUTF-8に変換する (experimental)
+-f		起動後でバックグラウンドに移行しない (主にデバッグ用)
+
+後はFUSEのサイトのドキュメントとかも参照
+http://fuse.sourceforge.net/ 特にFAQやWiki
+
+
+注意:
+-アプリはそのまま使用できるとは言っても
+ 復号後のストリームがそのまま再生できればの話.
+AACのチャネル構成変化とかで別途パッチ当てしないと動かない場合もある.
+
+-BCASカードがエラー起こしたり使用不能の場合は
+ ワンセグ以外何も出力されないことになるのに注意
+ 特に録画しておいてカードエラーで失敗しても
+ 後から(カードが復旧してから)復号する, ということは*できない*ので注意.
+
+- rendvr0を実行すると fuse_b25を実行するまで他のアプリは
+  DVBのdvr0デバイスにアクセスできなくなる(エラーになる)ことに注意.
+
+- FUSEでは通常 マウントしたユーザ以外は使用できない点に注意.
+  -oallow_otherオプションを付ければ他のユーザも
+ (パーミッションが得られれば)アクセスできるが,
+  このオプションをルート以外が使用するには
+  /etc/fuse.conf にuser_allow_otherという行を含める必要がある.
+
+- テキストの長さが変換に伴い２倍程に増加する. 
+  EITの変換において,仕様上収まらなくなる場合があり
+  その場合には強制的に尻切れ状態のEITテーブルが出力される
+
+- テキスト変換したNIT,SDT,EITのCRCは正しくない値(再計算していない)
+
+- テキスト変換はあくまでdvr0から出力されるNIT,SDT,EITのみが対象
+  フィルターをセットして/dev/dvb/adaperM/demuxNデバイスから直接読み出すアプリ
+  (例えばtv_grab_dvb みたいな)には非対応. 
+  原理的には demuxN デバイスもdvr0のようにI/Oを中継・変換が可能だけれど
+  実装がややこしくなるのと, 尻切れの発生の問題と,
+  アプリにパッチ当てる方が簡単っぽいので.
+  (現時点での利用アプリはなし？)
+
+
+サポートツール
+- helper/80-fuse-b25.rules
+ 上記使い方での バックアップの作成とマウント,およびその逆を行う
+ udevルールファイル.
+ (バイナリのインストールパスは調整が必要)
+ デバイスの追加/削除時に自動的に実行されるので ユーザの手間はなくなるが
+ fuse_b25はルートでの実行になるので注意.
+
+- helper/rendvr0
+ 上記使い方でのマウントポイントの作成,バックアップと その復元を行うスクリプト. 
+ 適切なパーミッションが必要
+(Fedoraの場合 /dev/dvb/adapter0 がrootにしか書き込み権限がない)
+ 例えば 
+ sudo rendvr0 ですべてのDVBデバイスのバックアップ+マウントポイント作成
+ sudo rendvr0 -a 1  で/dev/dvb/adapter1/ のみバックアップ+マウントポイント作成
+ sudo rendvr0 -u  ですべてのDVBデバイスを元に復元 
+ sudo rendvr0 -u -a 1 でadapter1のみ復元
+
+      sudo rendvr0 -a 1
+      fuse_b25 /dev/dvb/adapter1/dvr0
+       --> mythtv, mplayer, ....
+      fusermount -u /dev/dvb/adapter1/dvr0
+      sudo rendvr0 -u
+
+
+- helper/bin/rendvr0, helper/console.apps/rendvr0, helper/pam.d/rendvr0
+  上記rendvr0をコンソールユーザが使用するための pam_console用ファイル
+ インストール方法は ./fuse_b25.spec を参照
+
+
+ビルド方法
+ ./configure [options...]; make
+ ./src/fuse_b25が作成される
+ (pcsc-lite-devel やfuse-develが必要)
+ Fedora用のspecファイルも含めてあるので srpmからビルド/インストールも可能
+
