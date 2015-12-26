@@ -1,0 +1,9 @@
+fuse_b25
+*.o
+.deps/
+Makefile
+config.h
+config.log
+config.status
+stamp-*
+*.spec
