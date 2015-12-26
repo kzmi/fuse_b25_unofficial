@@ -270,8 +270,10 @@ demux_read(const char *path, char *buf, size_t size, struct fuse_file_info *fi)
 
 	filter = (struct secfilter_priv *)fi->fh;
 	pthread_mutex_lock(&filter->filter_lock);
-	if (size == 0)
+	if (size == 0) {
+		len = 0;
 		goto done;
+	}
 	if (filter->err != 0) {
 		len = -filter->err;
 		filter->remaining_len = 0;
@@ -324,6 +326,8 @@ demux_read(const char *path, char *buf, size_t size, struct fuse_file_info *fi)
 			sizeof(filter->outbuf));
 		if (size > seclen)
 			size = seclen;
+	} else {
+		seclen = 0;
 	}
 
 	if (filter->outbuf_head > filter->outbuf_tail) {

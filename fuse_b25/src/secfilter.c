@@ -134,8 +134,10 @@ direct_out(struct secfilter_priv *priv)
 		return;
 	}
 
-	if (priv->inbuf_len < 3)
+	if (priv->inbuf_len < 3) {
+		seclen = priv->inbuf_len;
 		goto baddata;
+	}
 	seclen = ((priv->inbuf[1] & 0x0f) << 8 | priv->inbuf[2]) + 3;
 	if (priv->inbuf_len < seclen)
 		goto baddata;
@@ -183,8 +185,10 @@ convert_sdt_sec(struct secfilter_priv *priv)
 	unsigned int seclen, newlen;
 	uint8_t tid = priv->inbuf[0];
 
-	if (priv->inbuf_len < 3)
+	if (priv->inbuf_len < 3) {
+		seclen = priv->inbuf_len;
 		goto baddata;
+	}
 
 	seclen = ((priv->inbuf[1] & 0x0f) << 8 | priv->inbuf[2]) + 3;
 	if (priv->inbuf_len < seclen || seclen < 15 ||
