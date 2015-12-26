@@ -19,6 +19,6 @@ fuse_b25_SOURCES = \
 	b25.c \
 	$(COMMON_SRC)
 
-AM_CFLAGS = $(FUSE_CFLAGS) $(PCSC_CFLAGS) -Wall
+AM_CFLAGS = $(FUSE_CFLAGS) $(PCSC_CFLAGS) -fno-strict-aliasing -Wall
 fuse_b25_LDADD = $(FUSE_LIBS) $(PCSC_LIBS)
 
