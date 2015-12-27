@@ -301,6 +301,7 @@ aribstr_to_utf16 (iconv_t cd, char *source, size_t len,
   gstr euc_str;
   char *p;
   char *q;
+  char *t1, *t2;
 
   enum
   {
@@ -335,7 +336,7 @@ aribstr_to_utf16 (iconv_t cd, char *source, size_t len,
     *dest = '\0';
     return 0;
   }
-  /* mark the string as UTF-16BE (ETSI EN300 496 Annex A) */
+  /* mark the string as UTF-16BE (ETSI EN 300 468 Annex A) */
   *dest++ = 0x11;
   buf_len--;
 
@@ -507,9 +508,23 @@ aribstr_to_utf16 (iconv_t cd, char *source, size_t len,
   q = dest;
   memset(dest, 0, buf_len--);
   iconv(cd, &p, &euc_str.used, &dest, &buf_len);
+  /* convert CRLF (ETSI EN 300 468 Annex A) */
+  for (t1 = t2 = q; t1 < dest; t1 += 2, t2 += 2) {
+    if (t1[0] == 0x00 && t1[1] == 0x0D
+        && t1[2] == 0x00 && t1[3] == 0x0A) {
+      t2[0] = 0xE0;
+      t2[1] = 0x8A;
+      t1 += 2;
+    } else {
+      if (t1 != t2) {
+        t2[0] = t1[0];
+        t2[1] = t1[1];
+      }
+    }
+  }
 
   free(euc_str.buf);
-  return dest - q + 1;
+  return t2 - q + 1;
 
 bailout:
   if (euc_str.buf)
